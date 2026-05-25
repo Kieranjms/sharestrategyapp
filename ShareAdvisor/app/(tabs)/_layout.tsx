@@ -52,6 +52,16 @@ export default function TabLayout() {
           ),
         }}
       />
+<Tabs.Screen
+  name="analysis"
+  options={{
+    title: 'AI Analysis',
+    tabBarIcon: ({ color, size }) => (
+      <Ionicons name="sparkles-outline" size={size} color={color} />
+    ),
+  }}
+/>
+
       <Tabs.Screen name="stock" options={{ href: null }} />
       <Tabs.Screen name="explore" options={{ href: null }} />
     </Tabs>

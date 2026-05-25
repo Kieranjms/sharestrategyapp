@@ -71,6 +71,11 @@ export default function StrategyScreen() {
     loadStrategy();
   }, []);
 
+  useEffect(() => {
+    const strategy = { goal, horizon, riskAppetite, investmentType, geography, marketCaps, sectors };
+    AsyncStorage.setItem('strategy', JSON.stringify(strategy));
+  }, [goal, horizon, riskAppetite, investmentType, geography, marketCaps, sectors]);
+
   async function loadStrategy() {
     const stored = await AsyncStorage.getItem('strategy');
     if (stored) {
@@ -281,10 +286,10 @@ Format each stock clearly with the ticker symbol first. Be specific and actionab
         ))}
       </View>
 
-      <TouchableOpacity style={styles.saveButton} onPress={saveStrategy}>
-        <Ionicons name={saved ? 'checkmark-circle' : 'save-outline'} size={20} color="#fff" />
-        <Text style={styles.saveButtonText}>{saved ? 'Saved!' : 'Save Strategy'}</Text>
-      </TouchableOpacity>
+      <View style={styles.saveButton}>
+  <Ionicons name="checkmark-circle" size={20} color="#fff" />
+  <Text style={styles.saveButtonText}>Strategy saved automatically</Text>
+</View>
 
       <View style={styles.scanContainer}>
         <View style={styles.scanHeader}>
