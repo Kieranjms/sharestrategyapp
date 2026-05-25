@@ -42,6 +42,7 @@ function cleanCiteTags(text: string) {
 }
 
 type BriefingData = {
+  tldr: string;
   marketOverview: string;
   watchToday: string;
   stocks: {
@@ -59,6 +60,7 @@ export default function HomeScreen() {
   const [watchlistLoading, setWatchlistLoading] = useState(true);
   const [briefing, setBriefing] = useState<BriefingData | null>(null);
   const [briefingLoading, setBriefingLoading] = useState(false);
+  const [briefingExpanded, setBriefingExpanded] = useState(false);
   const [hotPicks, setHotPicks] = useState<any[]>([]);
   const [lastBriefingDate, setLastBriefingDate] = useState('');
   const [expandedStocks, setExpandedStocks] = useState<string[]>([]);
@@ -83,7 +85,6 @@ export default function HomeScreen() {
       const stored = await AsyncStorage.getItem('watchlist');
       const items = stored ? JSON.parse(stored) : [];
       if (items.length === 0) { setWatchlist([]); setWatchlistLoading(false); return; }
-
       const results = await Promise.all(
         items.map(async (stock: any) => {
           try {
@@ -113,6 +114,8 @@ export default function HomeScreen() {
   }
 
   async function loadBriefing() {
+    await AsyncStorage.removeItem('briefingData');
+    await AsyncStorage.removeItem('briefingDate');
     const today = new Date().toDateString();
     const cached = await AsyncStorage.getItem('briefingData');
     const cachedDate = await AsyncStorage.getItem('briefingDate');
@@ -132,7 +135,8 @@ export default function HomeScreen() {
 
       if (items.length === 0) {
         setBriefing({
-          marketOverview: 'Add stocks to your watchlist to get a personalised morning briefing.',
+          tldr: 'Add stocks to your watchlist to get a personalised morning briefing.',
+          marketOverview: '',
           watchToday: '',
           stocks: [],
         });
@@ -151,6 +155,7 @@ Search Yahoo Finance, Reuters and BBC Business for the latest news.
 
 Return ONLY a valid JSON object in this exact format, no other text, no markdown, no cite tags:
 {
+  "tldr": "One punchy sentence summarising the market today. Max 15 words.",
   "marketOverview": "2-3 sentence overview of overall market mood today. Cite sources by name in brackets e.g. (Reuters).",
   "watchToday": "One specific thing to watch today, 1-2 sentences.",
   "stocks": [
@@ -190,6 +195,7 @@ Only include stocks with significant news. If no significant news, set hasSignif
       if (parsed) {
         const cleaned = {
           ...parsed,
+          tldr: cleanCiteTags(parsed.tldr || ''),
           marketOverview: cleanCiteTags(parsed.marketOverview || ''),
           watchToday: cleanCiteTags(parsed.watchToday || ''),
           stocks: parsed.stocks?.map((s: any) => ({
@@ -203,7 +209,8 @@ Only include stocks with significant news. If no significant news, set hasSignif
         setLastBriefingDate(today);
       } else {
         setBriefing({
-          marketOverview: cleanCiteTags(textContent) || 'Unable to generate briefing.',
+          tldr: cleanCiteTags(textContent) || 'Unable to generate briefing.',
+          marketOverview: '',
           watchToday: '',
           stocks: [],
         });
@@ -211,7 +218,8 @@ Only include stocks with significant news. If no significant news, set hasSignif
     } catch (error) {
       console.error('Briefing failed:', error);
       setBriefing({
-        marketOverview: 'Unable to generate briefing. Please try again.',
+        tldr: 'Unable to generate briefing. Please try again.',
+        marketOverview: '',
         watchToday: '',
         stocks: [],
       });
@@ -256,7 +264,7 @@ Only include stocks with significant news. If no significant news, set hasSignif
             <Ionicons name="sunny-outline" size={18} color="#facc15" />
           </View>
           <Text style={styles.tileTitle}>Morning Briefing</Text>
-          <TouchableOpacity onPress={generateBriefing} disabled={briefingLoading}>
+          <TouchableOpacity onPress={generateBriefing} disabled={briefingLoading} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Ionicons name="refresh-outline" size={16} color="#555" />
           </TouchableOpacity>
         </View>
@@ -268,90 +276,110 @@ Only include stocks with significant news. If no significant news, set hasSignif
           </View>
         ) : briefing ? (
           <>
-            <Text style={styles.briefingText}>{briefing.marketOverview}</Text>
+            <Text style={styles.tldrText}>{briefing.tldr}</Text>
 
-            {briefing.stocks.length > 0 && (
-              <View style={styles.stocksContainer}>
-                {briefing.stocks.map((stock) => {
-                  const isExpanded = expandedStocks.includes(stock.ticker);
-                  const watchlistStock = watchlist.find(w => w.ticker === stock.ticker);
-                  return (
-                    <TouchableOpacity
-                      key={stock.ticker}
-                      style={styles.stockRow}
-                      onPress={() => toggleStock(stock.ticker)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={styles.stockRowHeader}>
-                        <View style={styles.stockRowLeft}>
-                          <Text style={styles.stockRowTicker}>{stock.ticker}</Text>
-                          {watchlistStock && (
-                            <Text style={[
-                              styles.stockRowChange,
-                              { color: watchlistStock.up ? '#4ade80' : '#f87171' }
-                            ]}>
-                              {watchlistStock.change}
-                            </Text>
-                          )}
-                          {stock.hasSignificantNews && (
-                            <View style={styles.newsBadge}>
-                              <Text style={styles.newsBadgeText}>News</Text>
+            <TouchableOpacity
+              style={styles.expandButton}
+              onPress={() => setBriefingExpanded(prev => !prev)}
+            >
+              <Text style={styles.expandButtonText}>
+                {briefingExpanded ? 'Show less' : 'Read full briefing'}
+              </Text>
+              <Ionicons
+                name={briefingExpanded ? 'chevron-up' : 'chevron-down'}
+                size={14}
+                color="#818cf8"
+              />
+            </TouchableOpacity>
+
+            {briefingExpanded && (
+              <>
+                <Text style={styles.briefingText}>{briefing.marketOverview}</Text>
+
+                {briefing.stocks.length > 0 && (
+                  <View style={styles.stocksContainer}>
+                    {briefing.stocks.map((stock) => {
+                      const isExpanded = expandedStocks.includes(stock.ticker);
+                      const watchlistStock = watchlist.find(w => w.ticker === stock.ticker);
+                      return (
+                        <TouchableOpacity
+                          key={stock.ticker}
+                          style={styles.stockRow}
+                          onPress={() => toggleStock(stock.ticker)}
+                          activeOpacity={0.7}
+                        >
+                          <View style={styles.stockRowHeader}>
+                            <View style={styles.stockRowLeft}>
+                              <Text style={styles.stockRowTicker}>{stock.ticker}</Text>
+                              {watchlistStock && (
+                                <Text style={[
+                                  styles.stockRowChange,
+                                  { color: watchlistStock.up ? '#4ade80' : '#f87171' }
+                                ]}>
+                                  {watchlistStock.change}
+                                </Text>
+                              )}
+                              {stock.hasSignificantNews && (
+                                <View style={styles.newsBadge}>
+                                  <Text style={styles.newsBadgeText}>News</Text>
+                                </View>
+                              )}
+                            </View>
+                            <Ionicons
+                              name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                              size={16}
+                              color="#555"
+                            />
+                          </View>
+
+                          {isExpanded && (
+                            <View style={styles.stockExpanded}>
+                              <Text style={styles.stockSummary}>{stock.summary}</Text>
+                              {stock.sources.length > 0 && (
+                                <View style={styles.sourcesRow}>
+                                  <Ionicons name="link-outline" size={12} color="#555" />
+                                  <Text style={styles.sourcesText}>
+                                    Sources: {stock.sources.join(', ')}
+                                  </Text>
+                                </View>
+                              )}
+                              {watchlistStock && (
+                                <TouchableOpacity
+                                  style={styles.viewStockButton}
+                                  onPress={() => router.push({
+                                    pathname: '/(tabs)/stock',
+                                    params: {
+                                      ticker: stock.ticker,
+                                      name: stock.name,
+                                      price: watchlistStock.price,
+                                      change: watchlistStock.change,
+                                      rec: watchlistStock.rec,
+                                      market: watchlistStock.market,
+                                    }
+                                  })}
+                                >
+                                  <Text style={styles.viewStockText}>View stock →</Text>
+                                </TouchableOpacity>
+                              )}
                             </View>
                           )}
-                        </View>
-                        <Ionicons
-                          name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                          size={16}
-                          color="#555"
-                        />
-                      </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
 
-                      {isExpanded && (
-                        <View style={styles.stockExpanded}>
-                          <Text style={styles.stockSummary}>{stock.summary}</Text>
-                          {stock.sources.length > 0 && (
-                            <View style={styles.sourcesRow}>
-                              <Ionicons name="link-outline" size={12} color="#555" />
-                              <Text style={styles.sourcesText}>
-                                Sources: {stock.sources.join(', ')}
-                              </Text>
-                            </View>
-                          )}
-                          {watchlistStock && (
-                            <TouchableOpacity
-                              style={styles.viewStockButton}
-                              onPress={() => router.push({
-                                pathname: '/(tabs)/stock',
-                                params: {
-                                  ticker: stock.ticker,
-                                  name: stock.name,
-                                  price: watchlistStock.price,
-                                  change: watchlistStock.change,
-                                  rec: watchlistStock.rec,
-                                  market: watchlistStock.market,
-                                }
-                              })}
-                            >
-                              <Text style={styles.viewStockText}>View stock →</Text>
-                            </TouchableOpacity>
-                          )}
-                        </View>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            )}
+                {briefing.watchToday !== '' && (
+                  <View style={styles.watchTodayContainer}>
+                    <Text style={styles.watchTodayLabel}>📌 Watch today</Text>
+                    <Text style={styles.watchTodayText}>{briefing.watchToday}</Text>
+                  </View>
+                )}
 
-            {briefing.watchToday !== '' && (
-              <View style={styles.watchTodayContainer}>
-                <Text style={styles.watchTodayLabel}>📌 Watch today</Text>
-                <Text style={styles.watchTodayText}>{briefing.watchToday}</Text>
-              </View>
-            )}
-
-            {lastBriefingDate && (
-              <Text style={styles.briefingDate}>Last updated: {lastBriefingDate}</Text>
+                {lastBriefingDate && (
+                  <Text style={styles.briefingDate}>Last updated: {lastBriefingDate}</Text>
+                )}
+              </>
             )}
           </>
         ) : (
@@ -517,7 +545,10 @@ const styles = StyleSheet.create({
   tileTitle: { fontSize: 16, fontWeight: '500', color: '#fff', flex: 1 },
   tileLoading: { alignItems: 'center', padding: 20, gap: 8 },
   tileLoadingText: { color: '#555', fontSize: 12, textAlign: 'center' },
-  briefingText: { fontSize: 14, color: '#ccc', lineHeight: 22, marginBottom: 12 },
+  tldrText: { fontSize: 14, color: '#fff', fontWeight: '500', lineHeight: 20, marginBottom: 10 },
+  expandButton: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
+  expandButtonText: { fontSize: 12, color: '#818cf8' },
+  briefingText: { fontSize: 14, color: '#ccc', lineHeight: 22, marginBottom: 12, marginTop: 12 },
   briefingDate: { fontSize: 11, color: '#444', marginTop: 10 },
   generateButton: { backgroundColor: '#818cf8', borderRadius: 10, padding: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   generateButtonText: { color: '#0f0f14', fontWeight: '500', fontSize: 14 },
