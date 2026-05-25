@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -62,6 +62,10 @@ export default function StrategyScreen() {
   const [marketCaps, setMarketCaps] = useState<string[]>(['large', 'mid']);
   const [sectors, setSectors] = useState<string[]>(['technology', 'energy', 'financial', 'healthcare']);
   const [saved, setSaved] = useState(false);
+  const [claudeResults, setClaudeResults] = useState('');
+  const [gptResults, setGptResults] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'claude' | 'gpt'>('claude');
 
   useEffect(() => {
     loadStrategy();
@@ -94,6 +98,76 @@ export default function StrategyScreen() {
 
   function toggleSector(id: string) {
     setSectors(prev => prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]);
+  }
+
+  async function findStocks() {
+    await saveStrategy();
+    setAiLoading(true);
+    setClaudeResults('');
+    setGptResults('');
+
+    const strategyPrompt = `You are an expert investment analyst. Based on the following investor strategy, recommend exactly 5 specific stocks or ETFs.
+
+Investor Strategy:
+- Goal: ${GOALS.find(g => g.id === goal)?.label}
+- Investment Type: ${investmentType}
+- Time Horizon: ${HORIZONS.find(h => h.id === horizon)?.label} (${HORIZONS.find(h => h.id === horizon)?.sublabel})
+- Risk Appetite: ${RISK_APPETITES.find(r => r.id === riskAppetite)?.label}
+- Geography: ${GEOGRAPHIES.find(g => g.id === geography)?.label}
+- Market Cap: ${marketCaps.map((m: string) => MARKET_CAPS.find(mc => mc.id === m)?.label).join(', ')}
+- Sectors: ${sectors.map((s: string) => SECTORS.find(sec => sec.id === s)?.label).join(', ')}
+
+For each stock provide:
+1. Ticker symbol
+2. Company name
+3. Why it matches this strategy (2 sentences max)
+4. Your recommendation: BUY, HOLD or SELL
+5. One key risk
+
+Format each stock clearly with the ticker symbol first. Be specific and actionable.`;
+
+    try {
+      const [claudeRes, gptRes] = await Promise.all([
+        fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.EXPO_PUBLIC_ANTHROPIC_KEY || '',
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-client-side-api-key-allowed': 'true',
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 1500,
+            messages: [{ role: 'user', content: strategyPrompt }],
+          }),
+        }),
+        fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.EXPO_PUBLIC_OPENAI_KEY}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o',
+            max_tokens: 1500,
+            messages: [{ role: 'user', content: strategyPrompt }],
+          }),
+        }),
+      ]);
+
+      const claudeData = await claudeRes.json();
+      const gptData = await gptRes.json();
+
+      setClaudeResults(claudeData.content?.[0]?.text || 'No response from Claude.');
+      setGptResults(gptData.choices?.[0]?.message?.content || 'No response from GPT-4.');
+    } catch (error) {
+      console.error('AI scan failed:', error);
+      setClaudeResults('Failed to get recommendations. Please try again.');
+      setGptResults('Failed to get recommendations. Please try again.');
+    } finally {
+      setAiLoading(false);
+    }
   }
 
   return (
@@ -212,6 +286,61 @@ export default function StrategyScreen() {
         <Text style={styles.saveButtonText}>{saved ? 'Saved!' : 'Save Strategy'}</Text>
       </TouchableOpacity>
 
+      <View style={styles.scanContainer}>
+        <View style={styles.scanHeader}>
+          <Text style={styles.scanTitle}>AI Stock Scanner</Text>
+          <Text style={styles.scanSubtitle}>Claude & GPT-4</Text>
+        </View>
+
+        <TouchableOpacity
+          style={styles.scanButton}
+          onPress={findStocks}
+          disabled={aiLoading}
+        >
+          <Ionicons name="search-outline" size={20} color="#fff" />
+          <Text style={styles.scanButtonText}>
+            {aiLoading ? 'Scanning market...' : 'Find Me Stocks'}
+          </Text>
+        </TouchableOpacity>
+
+        {aiLoading && (
+          <View style={styles.scanLoading}>
+            <ActivityIndicator size="large" color="#818cf8" />
+            <Text style={styles.scanLoadingText}>Claude and GPT-4 are analysing your strategy...</Text>
+          </View>
+        )}
+
+        {(claudeResults || gptResults) && !aiLoading && (
+          <View style={styles.resultsContainer}>
+            <View style={styles.tabRow}>
+              <TouchableOpacity
+                style={[styles.tab, activeTab === 'claude' && styles.tabActive]}
+                onPress={() => setActiveTab('claude')}
+              >
+                <Text style={[styles.tabText, activeTab === 'claude' && styles.tabTextActive]}>Claude</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.tab, activeTab === 'gpt' && styles.tabActive]}
+                onPress={() => setActiveTab('gpt')}
+              >
+                <Text style={[styles.tabText, activeTab === 'gpt' && styles.tabTextActive]}>GPT-4</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.resultBox}>
+              <Text style={styles.resultText}>
+                {activeTab === 'claude' ? claudeResults : gptResults}
+              </Text>
+            </View>
+
+            <TouchableOpacity style={styles.rescanButton} onPress={findStocks}>
+              <Ionicons name="refresh-outline" size={14} color="#555" />
+              <Text style={styles.rescanText}>Scan again</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+
       <View style={{ height: 40 }} />
     </ScrollView>
   );
@@ -249,4 +378,22 @@ const styles = StyleSheet.create({
   sectorLabelActive: { color: '#fff' },
   saveButton: { backgroundColor: '#818cf8', borderRadius: 14, padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 32 },
   saveButtonText: { color: '#fff', fontSize: 16, fontWeight: '500' },
+  scanContainer: { marginTop: 24, backgroundColor: '#15151e', borderRadius: 16, padding: 16 },
+  scanHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  scanTitle: { fontSize: 16, fontWeight: '500', color: '#fff' },
+  scanSubtitle: { fontSize: 11, color: '#555' },
+  scanButton: { backgroundColor: '#4ade80', borderRadius: 12, padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  scanButtonText: { color: '#0f0f14', fontWeight: '500', fontSize: 15 },
+  scanLoading: { alignItems: 'center', padding: 24, gap: 12 },
+  scanLoadingText: { color: '#555', fontSize: 13, textAlign: 'center' },
+  resultsContainer: { marginTop: 16, gap: 12 },
+  tabRow: { flexDirection: 'row', gap: 8 },
+  tab: { flex: 1, padding: 10, borderRadius: 10, backgroundColor: '#1e1e2a', alignItems: 'center' },
+  tabActive: { backgroundColor: '#818cf8' },
+  tabText: { fontSize: 13, fontWeight: '500', color: '#555' },
+  tabTextActive: { color: '#fff' },
+  resultBox: { backgroundColor: '#0f0f14', borderRadius: 12, padding: 16 },
+  resultText: { color: '#ccc', fontSize: 13, lineHeight: 22 },
+  rescanButton: { flexDirection: 'row', alignItems: 'center', gap: 4, justifyContent: 'center' },
+  rescanText: { color: '#555', fontSize: 12 },
 });
