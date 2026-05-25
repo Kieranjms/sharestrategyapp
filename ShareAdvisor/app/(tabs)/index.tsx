@@ -24,15 +24,44 @@ function getRecommendation(change: number) {
   return 'HOLD';
 }
 
+function safeParseJSON(text: string) {
+  try {
+    const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    return JSON.parse(cleaned);
+  } catch {
+    return null;
+  }
+}
+
+function cleanCiteTags(text: string) {
+  return text
+    .replace(/<cite[^>]*>/g, '')
+    .replace(/<\/cite>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+type BriefingData = {
+  marketOverview: string;
+  watchToday: string;
+  stocks: {
+    ticker: string;
+    name: string;
+    summary: string;
+    sources: string[];
+    hasSignificantNews: boolean;
+  }[];
+};
+
 export default function HomeScreen() {
   const router = useRouter();
-
   const [watchlist, setWatchlist] = useState<any[]>([]);
   const [watchlistLoading, setWatchlistLoading] = useState(true);
-  const [briefing, setBriefing] = useState('');
+  const [briefing, setBriefing] = useState<BriefingData | null>(null);
   const [briefingLoading, setBriefingLoading] = useState(false);
   const [hotPicks, setHotPicks] = useState<any[]>([]);
   const [lastBriefingDate, setLastBriefingDate] = useState('');
+  const [expandedStocks, setExpandedStocks] = useState<string[]>([]);
 
   useFocusEffect(
     useCallback(() => {
@@ -85,14 +114,14 @@ export default function HomeScreen() {
 
   async function loadBriefing() {
     const today = new Date().toDateString();
-    const cached = await AsyncStorage.getItem('briefing');
+    const cached = await AsyncStorage.getItem('briefingData');
     const cachedDate = await AsyncStorage.getItem('briefingDate');
     if (cached && cachedDate === today) {
-      setBriefing(cached);
+      setBriefing(JSON.parse(cached));
       setLastBriefingDate(cachedDate);
       return;
     }
-    await generateBriefing();
+    generateBriefing();
   }
 
   async function generateBriefing() {
@@ -100,27 +129,43 @@ export default function HomeScreen() {
     try {
       const stored = await AsyncStorage.getItem('watchlist');
       const items = stored ? JSON.parse(stored) : [];
-      const tickers = items.map((s: any) => s.name).join(', ');
 
       if (items.length === 0) {
-        setBriefing('Add stocks to your watchlist to get a personalised morning briefing.');
+        setBriefing({
+          marketOverview: 'Add stocks to your watchlist to get a personalised morning briefing.',
+          watchToday: '',
+          stocks: [],
+        });
         setBriefingLoading(false);
         return;
       }
 
+      const tickerList = items.map((s: any) => `${s.ticker} (${s.name})`).join(', ');
       const today = new Date().toDateString();
-      const prompt = `You are a personal investment analyst writing a morning briefing for an investor. Today is ${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}.
 
-The investor is watching these stocks: ${tickers}
+      const prompt = `You are a personal investment analyst writing a morning briefing. Today is ${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}.
 
-Please:
-1. Search Yahoo Finance, Reuters and BBC Business for the latest news on these stocks and markets
-2. Write a concise morning briefing covering:
-   - Overall market mood today
-   - Key news for any of the watched stocks
-   - One thing to watch today
-   
-Keep it to 3-4 short paragraphs, written in plain English like a friendly analyst. No bullet points.`;
+The investor is watching: ${tickerList}
+
+Search Yahoo Finance, Reuters and BBC Business for the latest news.
+
+Return ONLY a valid JSON object in this exact format, no other text, no markdown, no cite tags:
+{
+  "marketOverview": "2-3 sentence overview of overall market mood today. Cite sources by name in brackets e.g. (Reuters).",
+  "watchToday": "One specific thing to watch today, 1-2 sentences.",
+  "stocks": [
+    {
+      "ticker": "AMD",
+      "name": "Advanced Micro Devices",
+      "summary": "2-3 sentence summary of news for this stock. Cite sources by name in brackets e.g. (Yahoo Finance).",
+      "sources": ["Yahoo Finance", "Reuters"],
+      "hasSignificantNews": true
+    }
+  ]
+}
+
+Important: Do NOT use XML tags like <cite> in your response. Just write source names in brackets like (Reuters).
+Only include stocks with significant news. If no significant news, set hasSignificantNews to false.`;
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -132,21 +177,44 @@ Keep it to 3-4 short paragraphs, written in plain English like a friendly analys
         },
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
-          max_tokens: 1000,
+          max_tokens: 2000,
           tools: [{ type: 'web_search_20250305', name: 'web_search' }],
           messages: [{ role: 'user', content: prompt }],
         }),
       });
 
       const data = await response.json();
-      const text = data.content?.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('') || 'Unable to generate briefing.';
-      setBriefing(text);
-      await AsyncStorage.setItem('briefing', text);
-      await AsyncStorage.setItem('briefingDate', today);
-      setLastBriefingDate(today);
+      const textContent = data.content?.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('') || '';
+      const parsed = safeParseJSON(textContent);
+
+      if (parsed) {
+        const cleaned = {
+          ...parsed,
+          marketOverview: cleanCiteTags(parsed.marketOverview || ''),
+          watchToday: cleanCiteTags(parsed.watchToday || ''),
+          stocks: parsed.stocks?.map((s: any) => ({
+            ...s,
+            summary: cleanCiteTags(s.summary || ''),
+          })) || [],
+        };
+        setBriefing(cleaned);
+        await AsyncStorage.setItem('briefingData', JSON.stringify(cleaned));
+        await AsyncStorage.setItem('briefingDate', today);
+        setLastBriefingDate(today);
+      } else {
+        setBriefing({
+          marketOverview: cleanCiteTags(textContent) || 'Unable to generate briefing.',
+          watchToday: '',
+          stocks: [],
+        });
+      }
     } catch (error) {
       console.error('Briefing failed:', error);
-      setBriefing('Unable to generate briefing. Please try again.');
+      setBriefing({
+        marketOverview: 'Unable to generate briefing. Please try again.',
+        watchToday: '',
+        stocks: [],
+      });
     } finally {
       setBriefingLoading(false);
     }
@@ -155,6 +223,12 @@ Keep it to 3-4 short paragraphs, written in plain English like a friendly analys
   async function loadHotPicks() {
     const stored = await AsyncStorage.getItem('lastAnalysis');
     if (stored) setHotPicks(JSON.parse(stored));
+  }
+
+  function toggleStock(ticker: string) {
+    setExpandedStocks(prev =>
+      prev.includes(ticker) ? prev.filter(t => t !== ticker) : [...prev, ticker]
+    );
   }
 
   const buyCount = watchlist.filter(s => s.rec === 'BUY').length;
@@ -194,11 +268,90 @@ Keep it to 3-4 short paragraphs, written in plain English like a friendly analys
           </View>
         ) : briefing ? (
           <>
-            <Text style={styles.briefingText}>{briefing}</Text>
+            <Text style={styles.briefingText}>{briefing.marketOverview}</Text>
+
+            {briefing.stocks.length > 0 && (
+              <View style={styles.stocksContainer}>
+                {briefing.stocks.map((stock) => {
+                  const isExpanded = expandedStocks.includes(stock.ticker);
+                  const watchlistStock = watchlist.find(w => w.ticker === stock.ticker);
+                  return (
+                    <TouchableOpacity
+                      key={stock.ticker}
+                      style={styles.stockRow}
+                      onPress={() => toggleStock(stock.ticker)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={styles.stockRowHeader}>
+                        <View style={styles.stockRowLeft}>
+                          <Text style={styles.stockRowTicker}>{stock.ticker}</Text>
+                          {watchlistStock && (
+                            <Text style={[
+                              styles.stockRowChange,
+                              { color: watchlistStock.up ? '#4ade80' : '#f87171' }
+                            ]}>
+                              {watchlistStock.change}
+                            </Text>
+                          )}
+                          {stock.hasSignificantNews && (
+                            <View style={styles.newsBadge}>
+                              <Text style={styles.newsBadgeText}>News</Text>
+                            </View>
+                          )}
+                        </View>
+                        <Ionicons
+                          name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                          size={16}
+                          color="#555"
+                        />
+                      </View>
+
+                      {isExpanded && (
+                        <View style={styles.stockExpanded}>
+                          <Text style={styles.stockSummary}>{stock.summary}</Text>
+                          {stock.sources.length > 0 && (
+                            <View style={styles.sourcesRow}>
+                              <Ionicons name="link-outline" size={12} color="#555" />
+                              <Text style={styles.sourcesText}>
+                                Sources: {stock.sources.join(', ')}
+                              </Text>
+                            </View>
+                          )}
+                          {watchlistStock && (
+                            <TouchableOpacity
+                              style={styles.viewStockButton}
+                              onPress={() => router.push({
+                                pathname: '/(tabs)/stock',
+                                params: {
+                                  ticker: stock.ticker,
+                                  name: stock.name,
+                                  price: watchlistStock.price,
+                                  change: watchlistStock.change,
+                                  rec: watchlistStock.rec,
+                                  market: watchlistStock.market,
+                                }
+                              })}
+                            >
+                              <Text style={styles.viewStockText}>View stock →</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {briefing.watchToday !== '' && (
+              <View style={styles.watchTodayContainer}>
+                <Text style={styles.watchTodayLabel}>📌 Watch today</Text>
+                <Text style={styles.watchTodayText}>{briefing.watchToday}</Text>
+              </View>
+            )}
+
             {lastBriefingDate && (
-              <Text style={styles.briefingDate}>
-                Last updated: {lastBriefingDate}
-              </Text>
+              <Text style={styles.briefingDate}>Last updated: {lastBriefingDate}</Text>
             )}
           </>
         ) : (
@@ -364,10 +517,27 @@ const styles = StyleSheet.create({
   tileTitle: { fontSize: 16, fontWeight: '500', color: '#fff', flex: 1 },
   tileLoading: { alignItems: 'center', padding: 20, gap: 8 },
   tileLoadingText: { color: '#555', fontSize: 12, textAlign: 'center' },
-  briefingText: { fontSize: 14, color: '#ccc', lineHeight: 22 },
+  briefingText: { fontSize: 14, color: '#ccc', lineHeight: 22, marginBottom: 12 },
   briefingDate: { fontSize: 11, color: '#444', marginTop: 10 },
   generateButton: { backgroundColor: '#818cf8', borderRadius: 10, padding: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   generateButtonText: { color: '#0f0f14', fontWeight: '500', fontSize: 14 },
+  stocksContainer: { borderTopWidth: 0.5, borderTopColor: '#1e1e2a', marginTop: 4 },
+  stockRow: { borderBottomWidth: 0.5, borderBottomColor: '#1e1e2a', paddingVertical: 12 },
+  stockRowHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  stockRowLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  stockRowTicker: { fontSize: 14, fontWeight: '500', color: '#fff' },
+  stockRowChange: { fontSize: 13 },
+  newsBadge: { backgroundColor: '#818cf820', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  newsBadgeText: { fontSize: 10, color: '#818cf8', fontWeight: '500' },
+  stockExpanded: { marginTop: 10, gap: 8 },
+  stockSummary: { fontSize: 13, color: '#ccc', lineHeight: 20 },
+  sourcesRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  sourcesText: { fontSize: 11, color: '#555' },
+  viewStockButton: { alignSelf: 'flex-start' },
+  viewStockText: { fontSize: 12, color: '#818cf8' },
+  watchTodayContainer: { backgroundColor: '#1a1a2e', borderRadius: 10, padding: 12, marginTop: 12 },
+  watchTodayLabel: { fontSize: 11, color: '#818cf8', fontWeight: '500', marginBottom: 4 },
+  watchTodayText: { fontSize: 13, color: '#ccc', lineHeight: 20 },
   portfolioPlaceholder: { alignItems: 'center', padding: 24, gap: 8 },
   placeholderText: { color: '#555', fontSize: 14, fontWeight: '500' },
   placeholderSub: { color: '#444', fontSize: 12 },
