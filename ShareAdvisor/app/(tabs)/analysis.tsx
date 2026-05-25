@@ -290,6 +290,7 @@ Respond with ONLY a valid JSON array:
       });
 
       setResults(finalResults);
+      await AsyncStorage.setItem('lastAnalysis', JSON.stringify(finalResults));
     } catch (error) {
       console.error('Analysis failed:', error);
     } finally {
