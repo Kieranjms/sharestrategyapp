@@ -96,7 +96,7 @@ export default function AnalysisScreen() {
         'anthropic-dangerous-client-side-api-key-allowed': 'true',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 1000,
         messages,
       }),
@@ -113,8 +113,9 @@ export default function AnalysisScreen() {
         'Authorization': `Bearer ${OPENAI_KEY}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
         max_tokens: 1000,
+        temperature: 0.2,
         messages: [
           { role: 'system', content: 'You are an investment analyst. Always respond with valid JSON array only, no markdown, no explanation.' },
           ...messages,
@@ -170,19 +171,19 @@ Respond with ONLY a valid JSON array, no other text:
   }
 ]`;
 
-      // Step 1 — Claude picks 2 stocks
-      setLoadingStep('Claude is picking stocks...');
-      const claudePicksText = await callClaude([{ role: 'user', content: pickPrompt }]);
-      const claudePicks = safeParseJSON(claudePicksText);
+    // Step 1 & 2 — Claude and GPT-4 pick stocks simultaneously
+setLoadingStep('Claude and GPT-4 are picking stocks...');
+const [claudePicksText, gptPicksText] = await Promise.all([
+  callClaude([{ role: 'user', content: pickPrompt }]),
+  callGPT([{ role: 'user', content: pickPrompt }]),
+]);
+const claudePicks = safeParseJSON(claudePicksText);
+const gptPicks = safeParseJSON(gptPicksText);
 
-      // Step 2 — GPT-4 picks 2 stocks
-      setLoadingStep('GPT-4 is picking stocks...');
-      const gptPicksText = await callGPT([{ role: 'user', content: pickPrompt }]);
-      const gptPicks = safeParseJSON(gptPicksText);
+      // Step 3 & 4 — Claude and GPT-4 review each other simultaneously
+setLoadingStep('AIs are reviewing each other\'s picks...');
 
-      // Step 3 — Claude reviews GPT-4's picks
-      setLoadingStep('Claude is reviewing GPT-4\'s picks...');
-      const claudeReviewPrompt = `You are an investment analyst. Review these stocks that GPT-4 recommended and give your verdict on each.
+const claudeReviewPrompt = `You are an investment analyst. Review these stocks that GPT-4 recommended and give your verdict on each.
 
 GPT-4's picks: ${JSON.stringify(gptPicks)}
 
@@ -197,12 +198,8 @@ Respond with ONLY a valid JSON array:
     "reasoning": "Your 1 sentence reasoning."
   }
 ]`;
-      const claudeReviewText = await callClaude([{ role: 'user', content: claudeReviewPrompt }]);
-      const claudeReviews = safeParseJSON(claudeReviewText);
 
-      // Step 4 — GPT-4 reviews Claude's picks
-      setLoadingStep('GPT-4 is reviewing Claude\'s picks...');
-      const gptReviewPrompt = `You are an investment analyst. Review these stocks that Claude recommended and give your verdict on each.
+const gptReviewPrompt = `You are an investment analyst. Review these stocks that Claude recommended and give your verdict on each.
 
 Claude's picks: ${JSON.stringify(claudePicks)}
 
@@ -217,8 +214,13 @@ Respond with ONLY a valid JSON array:
     "reasoning": "Your 1 sentence reasoning."
   }
 ]`;
-      const gptReviewText = await callGPT([{ role: 'user', content: gptReviewPrompt }]);
-      const gptReviews = safeParseJSON(gptReviewText);
+
+const [claudeReviewText, gptReviewText] = await Promise.all([
+  callClaude([{ role: 'user', content: claudeReviewPrompt }]),
+  callGPT([{ role: 'user', content: gptReviewPrompt }]),
+]);
+const claudeReviews = safeParseJSON(claudeReviewText);
+const gptReviews = safeParseJSON(gptReviewText);
 
       // Step 5 — Agent consolidates all 4 stocks
       setLoadingStep('Agent is consolidating analysis...');
@@ -271,7 +273,8 @@ Respond with ONLY a valid JSON array:
         },
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
-          max_tokens: 1500,
+          max_tokens: 1000,
+          temperature: 0.2,
           messages: [{ role: 'user', content: consolidationPrompt }],
         }),
       });
