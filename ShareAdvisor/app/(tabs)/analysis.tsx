@@ -222,10 +222,27 @@ Respond with ONLY a valid JSON array:
 
       // Step 5 — Agent consolidates all 4 stocks
       setLoadingStep('Agent is consolidating analysis...');
+      const seen = new Set<string>();
       const allStocks = [
         ...claudePicks.map((p: any) => ({ ...p, source: 'Claude' })),
         ...gptPicks.map((p: any) => ({ ...p, source: 'GPT-4' })),
-      ].sort((a, b) => a.ticker.localeCompare(b.ticker));
+      ]
+      .filter((stock) => {
+        if (seen.has(stock.ticker)) {
+          return false;
+        }
+        seen.add(stock.ticker);
+        return true;
+      })
+      .map((stock) => {
+        const inClaude = claudePicks.some((p: any) => p.ticker === stock.ticker);
+        const inGpt = gptPicks.some((p: any) => p.ticker === stock.ticker);
+        return {
+          ...stock,
+          source: inClaude && inGpt ? 'Both' : inClaude ? 'Claude' : 'GPT-4',
+        };
+      })
+      .sort((a, b) => a.ticker.localeCompare(b.ticker));
 
       const consolidationPrompt = `You are an investment analysis agent. Two AIs have picked and reviewed stocks. Provide a consolidated 2-sentence analysis for each stock.
 
@@ -289,7 +306,11 @@ Respond with ONLY a valid JSON array:
         };
       });
 
-      setResults(finalResults);
+      const uniqueResults = finalResults.filter((stock, index, self) =>
+  index === self.findIndex(s => s.ticker === stock.ticker)
+);
+setResults(uniqueResults);
+await AsyncStorage.setItem('lastAnalysis', JSON.stringify(uniqueResults));
       await AsyncStorage.setItem('lastAnalysis', JSON.stringify(finalResults));
     } catch (error) {
       console.error('Analysis failed:', error);
