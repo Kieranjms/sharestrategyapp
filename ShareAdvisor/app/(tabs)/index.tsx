@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 const FINNHUB_KEY = process.env.EXPO_PUBLIC_FINNHUB_KEY;
 const ANTHROPIC_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_KEY;
+const OPENAI_KEY = process.env.EXPO_PUBLIC_OPENAI_KEY;
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -114,16 +115,16 @@ export default function HomeScreen() {
   }
 
   async function loadBriefing() {
-    await AsyncStorage.removeItem('briefingData');
-    await AsyncStorage.removeItem('briefingDate');
     const today = new Date().toDateString();
     const cached = await AsyncStorage.getItem('briefingData');
     const cachedDate = await AsyncStorage.getItem('briefingDate');
+    
     if (cached && cachedDate === today) {
       setBriefing(JSON.parse(cached));
       setLastBriefingDate(cachedDate);
       return;
     }
+    
     generateBriefing();
   }
 
@@ -172,24 +173,27 @@ Return ONLY a valid JSON object in this exact format, no other text, no markdown
 Important: Do NOT use XML tags like <cite> in your response. Just write source names in brackets like (Reuters).
 Only include stocks with significant news. If no significant news, set hasSignificantNews to false.`;
 
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': ANTHROPIC_KEY || '',
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-client-side-api-key-allowed': 'true',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 2000,
-          tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-          messages: [{ role: 'user', content: prompt }],
-        }),
-      });
+const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${OPENAI_KEY}`,
+  },
+  body: JSON.stringify({
+    model: 'gpt-4o',
+    max_tokens: 2000,
+    messages: [
+      {
+        role: 'system',
+        content: 'You are a personal investment analyst. Always respond with valid JSON only, no markdown, no explanation, no cite tags.'
+      },
+      { role: 'user', content: prompt }
+    ],
+  }),
+});
 
-      const data = await response.json();
-      const textContent = data.content?.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('') || '';
+const data = await response.json();
+const textContent = data.choices?.[0]?.message?.content || '';
       const parsed = safeParseJSON(textContent);
 
       if (parsed) {
@@ -203,9 +207,9 @@ Only include stocks with significant news. If no significant news, set hasSignif
             summary: cleanCiteTags(s.summary || ''),
           })) || [],
         };
-        setBriefing(cleaned);
         await AsyncStorage.setItem('briefingData', JSON.stringify(cleaned));
         await AsyncStorage.setItem('briefingDate', today);
+        setBriefing(cleaned);
         setLastBriefingDate(today);
       } else {
         setBriefing({

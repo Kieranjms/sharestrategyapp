@@ -138,24 +138,27 @@ Please provide:
 
 Keep it concise, clear and jargon-free. No bullet points — write in natural paragraphs.`;
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_KEY || '',
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-client-side-api-key-allowed': 'true',
+const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${process.env.EXPO_PUBLIC_OPENAI_KEY}`,
+  },
+  body: JSON.stringify({
+    model: 'gpt-4o-mini',
+    max_tokens: 1000,
+    messages: [
+      {
+        role: 'system',
+        content: 'You are an expert investment analyst. Give clear, concise analysis in plain English.'
       },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
+      { role: 'user', content: prompt }
+    ],
+  }),
+});
 
-    const data = await response.json();
-    const text = data.content?.[0]?.text || 'Unable to generate analysis.';
-    setAiAnalysis(text);
+const data = await response.json();
+const text = data.choices?.[0]?.message?.content || 'Unable to generate analysis.';
   } catch (error) {
     console.error('AI analysis failed:', error);
     setAiAnalysis('Failed to load analysis. Please try again.');
