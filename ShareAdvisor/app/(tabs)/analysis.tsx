@@ -67,6 +67,8 @@ type StockResult = {
   consolidatedAnalysis: string;
   bothAgree: boolean;
   source: string;
+  scanDate?: string;
+  recChanged?: boolean;
 };
 
 export default function AnalysisScreen() {
@@ -78,11 +80,15 @@ export default function AnalysisScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      async function loadStrategy() {
+      async function loadData() {
         const stored = await AsyncStorage.getItem('strategy');
         if (stored) setStrategy(JSON.parse(stored));
+
+        // Load accumulated picks to show on screen
+        const picks = await AsyncStorage.getItem('lastAnalysis');
+        if (picks) setResults(JSON.parse(picks));
       }
-      loadStrategy();
+      loadData();
     }, [])
   );
 
@@ -131,6 +137,14 @@ export default function AnalysisScreen() {
     setResults([]);
 
     try {
+      // Load previous picks so we can exclude them and merge later
+      const storedPicks = await AsyncStorage.getItem('lastAnalysis');
+      const previousPicks: StockResult[] = storedPicks ? JSON.parse(storedPicks) : [];
+      const previousTickers = previousPicks.map(p => p.ticker);
+      const exclusionText = previousTickers.length > 0
+        ? `\n\nIMPORTANT: Do NOT recommend any of these tickers — they have already been analysed: ${previousTickers.join(', ')}. You MUST pick different stocks.`
+        : '';
+
       const strategyText = strategy ? `
         Goal: ${strategy.goal}
         Time Horizon: ${strategy.horizon}
@@ -141,14 +155,14 @@ export default function AnalysisScreen() {
         Sectors: ${strategy.sectors?.join(', ')}
       ` : 'General balanced investor.';
 
-      const investmentTypeInstruction = 
-  strategy?.investmentType === 'etf' ? 'You MUST recommend ETFs only. Do NOT recommend individual stocks.' :
-  strategy?.investmentType === 'stocks' ? 'You MUST recommend individual stocks only. Do NOT recommend ETFs.' :
-  'You may recommend either individual stocks or ETFs.';
+      const investmentTypeInstruction =
+        strategy?.investmentType === 'etf' ? 'You MUST recommend ETFs only. Do NOT recommend individual stocks.' :
+        strategy?.investmentType === 'stocks' ? 'You MUST recommend individual stocks only. Do NOT recommend ETFs.' :
+        'You may recommend either individual stocks or ETFs.';
 
-const pickPrompt = `You are an expert investment analyst. Based on this investor strategy, recommend exactly 2 investments.
+      const pickPrompt = `You are an expert investment analyst. Based on this investor strategy, recommend exactly 2 investments.
 
-IMPORTANT: ${investmentTypeInstruction}
+IMPORTANT: ${investmentTypeInstruction}${exclusionText}
 
 Strategy:
 ${strategyText}
@@ -171,58 +185,42 @@ Respond with ONLY a valid JSON array, no other text:
   }
 ]`;
 
-    // Step 1 & 2 — Claude and GPT-4 pick stocks simultaneously
-setLoadingStep('Claude and GPT-4 are picking stocks...');
-const [claudePicksText, gptPicksText] = await Promise.all([
-  callClaude([{ role: 'user', content: pickPrompt }]),
-  callGPT([{ role: 'user', content: pickPrompt }]),
-]);
-const claudePicks = safeParseJSON(claudePicksText);
-const gptPicks = safeParseJSON(gptPicksText);
+      // Step 1 — Claude and GPT pick stocks simultaneously
+      setLoadingStep('Claude and GPT-4 are picking stocks...');
+      const [claudePicksText, gptPicksText] = await Promise.all([
+        callClaude([{ role: 'user', content: pickPrompt }]),
+        callGPT([{ role: 'user', content: pickPrompt }]),
+      ]);
+      const claudePicks = safeParseJSON(claudePicksText);
+      const gptPicks = safeParseJSON(gptPicksText);
 
-      // Step 3 & 4 — Claude and GPT-4 review each other simultaneously
-setLoadingStep('AIs are reviewing each other\'s picks...');
+      // Step 2 — Claude and GPT review each other's picks simultaneously
+      setLoadingStep("AIs are reviewing each other's picks...");
 
-const claudeReviewPrompt = `You are an investment analyst. Review these stocks that GPT-4 recommended and give your verdict on each.
+      const claudeReviewPrompt = `You are an investment analyst. Review these stocks that GPT-4 recommended and give your verdict on each.
 
 GPT-4's picks: ${JSON.stringify(gptPicks)}
-
 Investor strategy: ${strategyText}
 
-For each stock, give your own BUY, HOLD or SELL verdict and a 1 sentence reasoning.
 Respond with ONLY a valid JSON array:
-[
-  {
-    "ticker": "AAPL",
-    "verdict": "BUY",
-    "reasoning": "Your 1 sentence reasoning."
-  }
-]`;
+[{ "ticker": "AAPL", "verdict": "BUY", "reasoning": "1 sentence." }]`;
 
-const gptReviewPrompt = `You are an investment analyst. Review these stocks that Claude recommended and give your verdict on each.
+      const gptReviewPrompt = `You are an investment analyst. Review these stocks that Claude recommended and give your verdict on each.
 
 Claude's picks: ${JSON.stringify(claudePicks)}
-
 Investor strategy: ${strategyText}
 
-For each stock, give your own BUY, HOLD or SELL verdict and a 1 sentence reasoning.
 Respond with ONLY a valid JSON array:
-[
-  {
-    "ticker": "AAPL",
-    "verdict": "BUY",
-    "reasoning": "Your 1 sentence reasoning."
-  }
-]`;
+[{ "ticker": "AAPL", "verdict": "BUY", "reasoning": "1 sentence." }]`;
 
-const [claudeReviewText, gptReviewText] = await Promise.all([
-  callClaude([{ role: 'user', content: claudeReviewPrompt }]),
-  callGPT([{ role: 'user', content: gptReviewPrompt }]),
-]);
-const claudeReviews = safeParseJSON(claudeReviewText);
-const gptReviews = safeParseJSON(gptReviewText);
+      const [claudeReviewText, gptReviewText] = await Promise.all([
+        callClaude([{ role: 'user', content: claudeReviewPrompt }]),
+        callGPT([{ role: 'user', content: gptReviewPrompt }]),
+      ]);
+      const claudeReviews = safeParseJSON(claudeReviewText);
+      const gptReviews = safeParseJSON(gptReviewText);
 
-      // Step 5 — Agent consolidates all 4 stocks
+      // Step 3 — Deduplicate and build stock list
       setLoadingStep('Agent is consolidating analysis...');
       const seen = new Set<string>();
       const allStocks = [
@@ -230,38 +228,28 @@ const gptReviews = safeParseJSON(gptReviewText);
         ...gptPicks.map((p: any) => ({ ...p, source: 'GPT-4' })),
       ]
       .filter((stock) => {
-        if (seen.has(stock.ticker)) {
-          return false;
-        }
+        if (seen.has(stock.ticker)) return false;
         seen.add(stock.ticker);
         return true;
       })
       .map((stock) => {
         const inClaude = claudePicks.some((p: any) => p.ticker === stock.ticker);
         const inGpt = gptPicks.some((p: any) => p.ticker === stock.ticker);
-        return {
-          ...stock,
-          source: inClaude && inGpt ? 'Both' : inClaude ? 'Claude' : 'GPT-4',
-        };
+        return { ...stock, source: inClaude && inGpt ? 'Both' : inClaude ? 'Claude' : 'GPT-4' };
       })
       .sort((a, b) => a.ticker.localeCompare(b.ticker));
 
-      const consolidationPrompt = `You are an investment analysis agent. Two AIs have picked and reviewed stocks. Provide a consolidated 2-sentence analysis for each stock.
+      // Step 4 — Consolidation agent
+      const consolidationPrompt = `You are an investment analysis agent. Provide a consolidated 2-sentence analysis for each stock.
 
 Claude's picks: ${JSON.stringify(claudePicks)}
 GPT-4's picks: ${JSON.stringify(gptPicks)}
 Claude's review of GPT-4's picks: ${JSON.stringify(claudeReviews)}
 GPT-4's review of Claude's picks: ${JSON.stringify(gptReviews)}
-
 Stocks: ${allStocks.map(s => s.ticker).join(', ')}
 
 Respond with ONLY a valid JSON array:
-[
-  {
-    "ticker": "AAPL",
-    "consolidatedAnalysis": "2 sentence consolidated analysis."
-  }
-]`;
+[{ "ticker": "AAPL", "consolidatedAnalysis": "2 sentence analysis." }]`;
 
       const agentRes = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -279,11 +267,11 @@ Respond with ONLY a valid JSON array:
         }),
       });
       const agentData = await agentRes.json();
-      const agentText = agentData.content?.[0]?.text || '[]';
-      const agentAnalysis = safeParseJSON(agentText);
+      const agentAnalysis = safeParseJSON(agentData.content?.[0]?.text || '[]');
 
-      // Build final results
-      const finalResults: StockResult[] = allStocks.map(stock => {
+      // Build new results from this scan
+      const scanDate = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+      const newResults: StockResult[] = allStocks.map(stock => {
         const claudePick = claudePicks.find((p: any) => p.ticker === stock.ticker);
         const gptPick = gptPicks.find((p: any) => p.ticker === stock.ticker);
         const claudeReview = claudeReviews.find((r: any) => r.ticker === stock.ticker);
@@ -291,30 +279,52 @@ Respond with ONLY a valid JSON array:
         const agent = agentAnalysis.find((a: any) => a.ticker === stock.ticker);
 
         const claudeVerdict = claudePick?.verdict || claudeReview?.verdict || 'Not reviewed';
-        const claudeReasoning = claudePick?.reasoning || claudeReview?.reasoning || 'No reasoning provided';
         const gptVerdict = gptPick?.verdict || gptReview?.verdict || 'Not reviewed';
-        const gptReasoning = gptPick?.reasoning || gptReview?.reasoning || 'No reasoning provided';
 
         return {
           ticker: stock.ticker,
           name: stock.name,
           exchange: stock.exchange,
           claudeVerdict,
-          claudeReasoning,
+          claudeReasoning: claudePick?.reasoning || claudeReview?.reasoning || 'No reasoning provided',
           gptVerdict,
-          gptReasoning,
+          gptReasoning: gptPick?.reasoning || gptReview?.reasoning || 'No reasoning provided',
           consolidatedAnalysis: agent?.consolidatedAnalysis || 'Analysis unavailable.',
           bothAgree: claudeVerdict === gptVerdict && claudeVerdict !== 'Not reviewed',
           source: stock.source,
+          scanDate,
+          recChanged: false,
         };
       });
 
-      const uniqueResults = finalResults.filter((stock, index, self) =>
-  index === self.findIndex(s => s.ticker === stock.ticker)
-);
-setResults(uniqueResults);
-await AsyncStorage.setItem('lastAnalysis', JSON.stringify(uniqueResults));
-      await AsyncStorage.setItem('lastAnalysis', JSON.stringify(finalResults));
+      // Merge new results with previous picks
+      // - New tickers get added
+      // - Existing tickers get updated if recommendation changed, flagged with recChanged
+      // - Existing tickers with same rec are skipped (no duplicate)
+      const mergedPicks = [...previousPicks];
+      for (const newPick of newResults) {
+        const existingIndex = mergedPicks.findIndex(p => p.ticker === newPick.ticker);
+        if (existingIndex === -1) {
+          // Brand new stock — add it
+          mergedPicks.push(newPick);
+        } else {
+          const existing = mergedPicks[existingIndex];
+          const recChanged =
+            existing.claudeVerdict !== newPick.claudeVerdict ||
+            existing.gptVerdict !== newPick.gptVerdict;
+          if (recChanged) {
+            // Recommendation changed — update and flag it
+            mergedPicks[existingIndex] = { ...newPick, recChanged: true };
+          }
+          // Same rec — skip, no duplicate
+        }
+      }
+
+      // Save merged list (cap at 20 most recent unique stocks)
+      const trimmedPicks = mergedPicks.slice(-20);
+      setResults(trimmedPicks);
+      await AsyncStorage.setItem('lastAnalysis', JSON.stringify(trimmedPicks));
+
     } catch (error) {
       console.error('Analysis failed:', error);
     } finally {
@@ -364,14 +374,18 @@ await AsyncStorage.setItem('lastAnalysis', JSON.stringify(uniqueResults));
             return (
               <TouchableOpacity
                 key={stock.ticker}
-                style={[styles.tile, stock.bothAgree && styles.tileAgree]}
+                style={[
+                  styles.tile,
+                  stock.bothAgree && styles.tileAgree,
+                  stock.recChanged && styles.tileChanged,
+                ]}
                 onPress={() => router.push({
-                  pathname: '/(tabs)/stock',
+                  pathname: '/stock',
                   params: {
                     ticker: stock.ticker,
                     name: stock.name,
-                    price: 'Loading...',
-                    change: '...',
+                    price: '',
+                    change: '',
                     rec: stock.claudeVerdict,
                     market: stock.exchange,
                   }
@@ -383,7 +397,12 @@ await AsyncStorage.setItem('lastAnalysis', JSON.stringify(uniqueResults));
                   <View style={styles.sourceBadge}>
                     <Text style={styles.sourceText}>Picked by {stock.source}</Text>
                   </View>
-                  {stock.bothAgree && (
+                  {stock.recChanged && (
+                    <View style={styles.changedBadge}>
+                      <Text style={styles.changedText}>⚠ Rec changed</Text>
+                    </View>
+                  )}
+                  {stock.bothAgree && !stock.recChanged && (
                     <View style={styles.agreeBadge}>
                       <Text style={styles.agreeText}>✓ Agree</Text>
                     </View>
@@ -417,8 +436,11 @@ await AsyncStorage.setItem('lastAnalysis', JSON.stringify(uniqueResults));
                 </View>
 
                 <View style={styles.tileFooter}>
+                  {stock.scanDate && (
+                    <Text style={styles.scanDate}>Scanned {stock.scanDate}</Text>
+                  )}
                   <Ionicons name="chevron-forward" size={14} color="#555" />
-                  <Text style={styles.tapHint}>Tap to see live price & chart</Text>
+                  <Text style={styles.tapHint}>Tap for live price & chart</Text>
                 </View>
               </TouchableOpacity>
             );
@@ -446,6 +468,7 @@ const styles = StyleSheet.create({
   resultsTitle: { fontSize: 16, fontWeight: '500', color: '#fff', marginBottom: 16 },
   tile: { backgroundColor: '#15151e', borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 0.5, borderColor: '#1e1e2a' },
   tileAgree: { borderColor: '#4ade80', borderWidth: 1 },
+  tileChanged: { borderColor: '#facc15', borderWidth: 1 },
   tileHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
   exchangeDot: { width: 10, height: 10, borderRadius: 5 },
   tileExchange: { fontSize: 11, fontWeight: '500' },
@@ -453,6 +476,8 @@ const styles = StyleSheet.create({
   sourceText: { fontSize: 10, color: '#555' },
   agreeBadge: { backgroundColor: '#0d2818', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   agreeText: { fontSize: 10, color: '#4ade80', fontWeight: '500' },
+  changedBadge: { backgroundColor: '#1a1500', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  changedText: { fontSize: 10, color: '#facc15', fontWeight: '500' },
   tileTicker: { fontSize: 24, fontWeight: '500', color: '#fff', marginBottom: 2 },
   tileName: { fontSize: 13, color: '#888', marginBottom: 16 },
   verdictsRow: { flexDirection: 'row', backgroundColor: '#0f0f14', borderRadius: 12, padding: 14, marginBottom: 14, gap: 8 },
@@ -464,6 +489,7 @@ const styles = StyleSheet.create({
   consolidatedContainer: { backgroundColor: '#1a1a2e', borderRadius: 10, padding: 12, marginBottom: 12 },
   consolidatedLabel: { fontSize: 10, color: '#818cf8', fontWeight: '500', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 },
   consolidatedText: { fontSize: 13, color: '#ccc', lineHeight: 20 },
-  tileFooter: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  tileFooter: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  scanDate: { fontSize: 11, color: '#444', flex: 1 },
   tapHint: { fontSize: 11, color: '#555' },
 });

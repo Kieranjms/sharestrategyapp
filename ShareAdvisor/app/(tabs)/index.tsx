@@ -5,7 +5,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 
 const FINNHUB_KEY = process.env.EXPO_PUBLIC_FINNHUB_KEY;
-const ANTHROPIC_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_KEY;
 const OPENAI_KEY = process.env.EXPO_PUBLIC_OPENAI_KEY;
 
 function getGreeting() {
@@ -63,6 +62,7 @@ export default function HomeScreen() {
   const [briefingLoading, setBriefingLoading] = useState(false);
   const [briefingExpanded, setBriefingExpanded] = useState(false);
   const [hotPicks, setHotPicks] = useState<any[]>([]);
+  const [hotPicksExpanded, setHotPicksExpanded] = useState(false);
   const [lastBriefingDate, setLastBriefingDate] = useState('');
   const [expandedStocks, setExpandedStocks] = useState<string[]>([]);
 
@@ -118,13 +118,11 @@ export default function HomeScreen() {
     const today = new Date().toDateString();
     const cached = await AsyncStorage.getItem('briefingData');
     const cachedDate = await AsyncStorage.getItem('briefingDate');
-    
     if (cached && cachedDate === today) {
       setBriefing(JSON.parse(cached));
       setLastBriefingDate(cachedDate);
       return;
     }
-    
     generateBriefing();
   }
 
@@ -173,27 +171,27 @@ Return ONLY a valid JSON object in this exact format, no other text, no markdown
 Important: Do NOT use XML tags like <cite> in your response. Just write source names in brackets like (Reuters).
 Only include stocks with significant news. If no significant news, set hasSignificantNews to false.`;
 
-const response = await fetch('https://api.openai.com/v1/chat/completions', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${OPENAI_KEY}`,
-  },
-  body: JSON.stringify({
-    model: 'gpt-4o',
-    max_tokens: 2000,
-    messages: [
-      {
-        role: 'system',
-        content: 'You are a personal investment analyst. Always respond with valid JSON only, no markdown, no explanation, no cite tags.'
-      },
-      { role: 'user', content: prompt }
-    ],
-  }),
-});
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENAI_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o',
+          max_tokens: 2000,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a personal investment analyst. Always respond with valid JSON only, no markdown, no explanation, no cite tags.'
+            },
+            { role: 'user', content: prompt }
+          ],
+        }),
+      });
 
-const data = await response.json();
-const textContent = data.choices?.[0]?.message?.content || '';
+      const data = await response.json();
+      const textContent = data.choices?.[0]?.message?.content || '';
       const parsed = safeParseJSON(textContent);
 
       if (parsed) {
@@ -351,7 +349,7 @@ const textContent = data.choices?.[0]?.message?.content || '';
                                 <TouchableOpacity
                                   style={styles.viewStockButton}
                                   onPress={() => router.push({
-                                    pathname: '/(tabs)/stock',
+                                    pathname: '/stock',
                                     params: {
                                       ticker: stock.ticker,
                                       name: stock.name,
@@ -485,6 +483,13 @@ const textContent = data.choices?.[0]?.message?.content || '';
           <TouchableOpacity onPress={() => router.push('/(tabs)/analysis')}>
             <Text style={styles.seeAll}>Run new scan →</Text>
           </TouchableOpacity>
+          <TouchableOpacity onPress={() => setHotPicksExpanded(prev => !prev)} style={{ padding: 4 }}>
+            <Ionicons
+              name={hotPicksExpanded ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              color="#555"
+            />
+          </TouchableOpacity>
         </View>
 
         {hotPicks.length === 0 ? (
@@ -496,39 +501,52 @@ const textContent = data.choices?.[0]?.message?.content || '';
             </TouchableOpacity>
           </View>
         ) : (
-          hotPicks.slice(0, 3).map((pick: any) => (
-            <TouchableOpacity
-              key={pick.ticker}
-              style={styles.pickRow}
-              onPress={() => router.push({
-                pathname: '/(tabs)/stock',
-                params: {
-                  ticker: pick.ticker,
-                  name: pick.name,
-                  price: 'Loading...',
-                  change: '...',
-                  rec: pick.claudeVerdict,
-                  market: pick.exchange,
-                }
-              })}
-            >
-              <View style={styles.pickLeft}>
-                <Text style={styles.pickTicker}>{pick.ticker}</Text>
-                <Text style={styles.pickName} numberOfLines={1}>{pick.name}</Text>
-              </View>
-              <View style={styles.pickRight}>
-                <Text style={[styles.pickVerdict, {
-                  color: pick.claudeVerdict?.includes('BUY') ? '#4ade80' :
-                    pick.claudeVerdict?.includes('SELL') ? '#f87171' : '#facc15'
-                }]}>
-                  {pick.claudeVerdict?.split(' ')[0]}
+          <>
+            {(hotPicksExpanded ? hotPicks : hotPicks.slice(0, 2)).map((pick: any) => (
+              <TouchableOpacity
+                key={pick.ticker}
+                style={styles.pickRow}
+                onPress={() => router.push({
+                  pathname: '/stock',
+                  params: {
+                    ticker: pick.ticker,
+                    name: pick.name,
+                    price: '',
+                    change: '',
+                    rec: pick.claudeVerdict,
+                    market: pick.exchange,
+                  }
+                })}
+              >
+                <View style={styles.pickLeft}>
+                  <Text style={styles.pickTicker}>{pick.ticker}</Text>
+                  <Text style={styles.pickName} numberOfLines={1}>{pick.name}</Text>
+                </View>
+                <View style={styles.pickRight}>
+                  <Text style={[styles.pickVerdict, {
+                    color: pick.claudeVerdict?.includes('BUY') ? '#4ade80' :
+                      pick.claudeVerdict?.includes('SELL') ? '#f87171' : '#facc15'
+                  }]}>
+                    {pick.claudeVerdict?.split(' ')[0]}
+                  </Text>
+                  <Text style={styles.pickBothAgree}>
+                    {pick.bothAgree ? '✓ Both agree' : ''}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+
+            {!hotPicksExpanded && hotPicks.length > 2 && (
+              <TouchableOpacity
+                onPress={() => setHotPicksExpanded(true)}
+                style={styles.showMoreButton}
+              >
+                <Text style={styles.showMoreText}>
+                  +{hotPicks.length - 2} more — tap to expand
                 </Text>
-                <Text style={styles.pickBothAgree}>
-                  {pick.bothAgree ? '✓ Both agree' : ''}
-                </Text>
-              </View>
-            </TouchableOpacity>
-          ))
+              </TouchableOpacity>
+            )}
+          </>
         )}
       </View>
 
@@ -593,4 +611,6 @@ const styles = StyleSheet.create({
   pickRight: { alignItems: 'flex-end' },
   pickVerdict: { fontSize: 13, fontWeight: '500' },
   pickBothAgree: { fontSize: 10, color: '#4ade80', marginTop: 2 },
+  showMoreButton: { paddingTop: 10, alignItems: 'center' },
+  showMoreText: { color: '#818cf8', fontSize: 12 },
 });

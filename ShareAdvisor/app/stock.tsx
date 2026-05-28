@@ -5,11 +5,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { LineChart } from 'react-native-gifted-charts';
 
-const API_KEY = process.env.EXPO_PUBLIC_ALPHA_KEY;
-const ANTHROPIC_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_KEY;
+const ALPHA_KEY = process.env.EXPO_PUBLIC_ALPHA_KEY;
+const OPENAI_KEY = process.env.EXPO_PUBLIC_OPENAI_KEY;
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-
 const RANGES = ['1W', '1M', '3M', '1Y'];
 
 function getCurrency(market: string) {
@@ -23,7 +22,6 @@ function formatLabel(dateStr: string, range: string) {
   const month = MONTHS[date.getMonth()];
   const year = String(date.getFullYear()).slice(2);
   if (range === '1Y') return `${month} '${year}`;
-  if (range === '3M') return `${day} ${month}`;
   return `${day} ${month}`;
 }
 
@@ -36,9 +34,7 @@ function sliceData(data: any[], range: string) {
     case '1Y': sliced = data.slice(-252); break;
     default: sliced = data.slice(-30);
   }
-
   if (sliced.length === 0) return [];
-
   return sliced.map((point, i) => {
     const isFirst = i === 0;
     const isLast = i === sliced.length - 1;
@@ -63,6 +59,9 @@ export default function StockScreen() {
   const candles = sliceData(allCandles, range);
   const chartWidth = containerWidth - 80;
   const spacing = Math.floor(chartWidth / Math.max(candles.length, 1));
+  const isUp = String(change).startsWith('+');
+  const recColour = rec === 'BUY' ? '#4ade80' : rec === 'SELL' ? '#f87171' : '#facc15';
+  const chartColour = isUp ? '#4ade80' : '#f87171';
 
   useEffect(() => {
     async function fetchCandles() {
@@ -70,15 +69,13 @@ export default function StockScreen() {
         setLoading(true);
         setError('');
         const res = await fetch(
-          `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${ticker}&outputsize=compact&apikey=${API_KEY}`
+          `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${ticker}&outputsize=compact&apikey=${ALPHA_KEY}`
         );
         const data = await res.json();
-
         if (data.Note || data.Information) {
           setError('API limit reached. Try again in a minute.');
           return;
         }
-
         const timeSeries = data['Time Series (Daily)'];
         if (timeSeries) {
           const points = Object.entries(timeSeries)
@@ -99,27 +96,25 @@ export default function StockScreen() {
       }
     }
     fetchCandles();
+  }, [ticker]);
 
-}, [ticker]);
+  async function fetchAiAnalysis() {
+    setAiLoading(true);
+    setAiAnalysis('');
+    try {
+      const stored = await AsyncStorage.getItem('strategy');
+      const strategy = stored ? JSON.parse(stored) : null;
+      const strategyText = strategy ? `
+        Investment Goal: ${strategy.goal}
+        Time Horizon: ${strategy.horizon}
+        Risk Appetite: ${strategy.riskAppetite}
+        Investment Type: ${strategy.investmentType}
+        Geography: ${strategy.geography}
+        Market Caps: ${strategy.marketCaps?.join(', ')}
+        Sectors: ${strategy.sectors?.join(', ')}
+      ` : 'No strategy set — provide general advice.';
 
-async function fetchAiAnalysis() {
-  setAiLoading(true);
-  setAiAnalysis('');
-  try {
-    const stored = await AsyncStorage.getItem('strategy');
-    const strategy = stored ? JSON.parse(stored) : null;
-
-    const strategyText = strategy ? `
-      Investment Goal: ${strategy.goal}
-      Time Horizon: ${strategy.horizon}
-      Risk Appetite: ${strategy.riskAppetite}
-      Investment Type: ${strategy.investmentType}
-      Geography: ${strategy.geography}
-      Market Caps: ${strategy.marketCaps?.join(', ')}
-      Sectors: ${strategy.sectors?.join(', ')}
-    ` : 'No strategy set — provide general advice.';
-
-    const prompt = `You are an expert investment analyst. Analyse this stock and give a personalised recommendation.
+      const prompt = `You are an expert investment analyst. Analyse this stock and give a personalised recommendation.
 
 Stock: ${ticker} — ${name}
 Current Price: ${price}
@@ -138,44 +133,45 @@ Please provide:
 
 Keep it concise, clear and jargon-free. No bullet points — write in natural paragraphs.`;
 
-const response = await fetch('https://api.openai.com/v1/chat/completions', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${process.env.EXPO_PUBLIC_OPENAI_KEY}`,
-  },
-  body: JSON.stringify({
-    model: 'gpt-4o-mini',
-    max_tokens: 1000,
-    messages: [
-      {
-        role: 'system',
-        content: 'You are an expert investment analyst. Give clear, concise analysis in plain English.'
-      },
-      { role: 'user', content: prompt }
-    ],
-  }),
-});
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENAI_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          max_tokens: 1000,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an expert investment analyst. Give clear, concise analysis in plain English.',
+            },
+            { role: 'user', content: prompt },
+          ],
+        }),
+      });
 
-const data = await response.json();
-const text = data.choices?.[0]?.message?.content || 'Unable to generate analysis.';
-  } catch (error) {
-    console.error('AI analysis failed:', error);
-    setAiAnalysis('Failed to load analysis. Please try again.');
-  } finally {
-    setAiLoading(false);
+      const data = await response.json();
+      const text = data.choices?.[0]?.message?.content || 'Unable to generate analysis.';
+      setAiAnalysis(text);
+    } catch (error) {
+      console.error('AI analysis failed:', error);
+      setAiAnalysis('Failed to load analysis. Please try again.');
+    } finally {
+      setAiLoading(false);
+    }
   }
-}
-
-  const isUp = String(change).startsWith('+');
-  const recColour = rec === 'BUY' ? '#4ade80' : rec === 'SELL' ? '#f87171' : '#facc15';
-  const chartColour = isUp ? '#4ade80' : '#f87171';
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
 
-      <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-        <Text style={styles.backText}>← Back</Text>
+      <TouchableOpacity
+        onPress={() => router.back()}
+        style={styles.backButton}
+      >
+        <Ionicons name="chevron-back" size={20} color="#818cf8" />
+        <Text style={styles.backText}>Back</Text>
       </TouchableOpacity>
 
       <Text style={styles.ticker}>{ticker}</Text>
@@ -183,9 +179,7 @@ const text = data.choices?.[0]?.message?.content || 'Unable to generate analysis
 
       <View style={styles.priceRow}>
         <Text style={styles.price}>{currency}{String(price).replace(/[$£]/g, '')}</Text>
-        <Text style={[styles.change, { color: isUp ? '#4ade80' : '#f87171' }]}>
-          {change}
-        </Text>
+        <Text style={[styles.change, { color: isUp ? '#4ade80' : '#f87171' }]}>{change}</Text>
       </View>
 
       <View style={[styles.recBadge, { backgroundColor: recColour + '20', borderColor: recColour + '40' }]}>
@@ -275,7 +269,7 @@ const text = data.choices?.[0]?.message?.content || 'Unable to generate analysis
       <View style={styles.aiContainer}>
         <View style={styles.aiHeader}>
           <Text style={styles.aiTitle}>AI Analysis</Text>
-          <Text style={styles.aiSubtitle}>Powered by Claude</Text>
+          <Text style={styles.aiSubtitle}>Powered by GPT-4o mini</Text>
         </View>
 
         {!aiAnalysis && !aiLoading && (
@@ -288,7 +282,7 @@ const text = data.choices?.[0]?.message?.content || 'Unable to generate analysis
         {aiLoading && (
           <View style={styles.aiLoading}>
             <ActivityIndicator size="small" color="#818cf8" />
-            <Text style={styles.aiLoadingText}>Claude is analysing...</Text>
+            <Text style={styles.aiLoadingText}>Analysing with GPT-4o mini...</Text>
           </View>
         )}
 
@@ -309,7 +303,7 @@ const text = data.choices?.[0]?.message?.content || 'Unable to generate analysis
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0f0f14', padding: 20 },
-  backButton: { marginTop: 16, marginBottom: 8 },
+  backButton: { marginTop: 16, marginBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 2, alignSelf: 'flex-start', padding: 12 },
   backText: { color: '#818cf8', fontSize: 15 },
   ticker: { fontSize: 36, fontWeight: '500', color: '#fff', marginTop: 8 },
   name: { fontSize: 15, color: '#666', marginTop: 4 },

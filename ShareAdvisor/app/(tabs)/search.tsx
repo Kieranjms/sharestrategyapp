@@ -199,7 +199,7 @@ export default function SearchScreen() {
             key={`${stock.symbol}-${stock.exchange}`}
             style={styles.card}
             onPress={() => data && router.push({
-              pathname: '/(tabs)/stock',
+              pathname: '/stock',
               params: {
                 ticker: stock.symbol,
                 name: stock.description,

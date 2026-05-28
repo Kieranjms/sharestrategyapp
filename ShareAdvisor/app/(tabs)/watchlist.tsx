@@ -156,7 +156,7 @@ export default function WatchlistScreen() {
               key={stock.ticker}
               style={styles.card}
               onPress={() => router.push({
-                pathname: '/(tabs)/stock',
+                pathname: '/stock',
                 params: {
                   ticker: stock.ticker,
                   name: stock.name,
