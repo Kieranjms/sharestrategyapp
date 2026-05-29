@@ -61,6 +61,15 @@ export default function TabLayout() {
     ),
   }}
 />
+<Tabs.Screen
+  name="etf"
+  options={{
+    title: 'ETFs',
+    tabBarIcon: ({ color, size }) => (
+      <Ionicons name="bar-chart-outline" size={size} color={color} />
+    ),
+  }}
+/>
 
       <Tabs.Screen name="explore" options={{ href: null }} />
     </Tabs>

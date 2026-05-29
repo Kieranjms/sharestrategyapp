@@ -4,7 +4,6 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 
-const FINNHUB_KEY = process.env.EXPO_PUBLIC_FINNHUB_KEY;
 const OPENAI_KEY = process.env.EXPO_PUBLIC_OPENAI_KEY;
 
 function getGreeting() {
@@ -80,35 +79,14 @@ export default function HomeScreen() {
     ]);
   }
 
+  // Reads from the cache saved by the watchlist screen — no extra API calls
   async function loadWatchlist() {
     try {
       setWatchlistLoading(true);
-      const stored = await AsyncStorage.getItem('watchlist');
-      const items = stored ? JSON.parse(stored) : [];
-      if (items.length === 0) { setWatchlist([]); setWatchlistLoading(false); return; }
-      const results = await Promise.all(
-        items.map(async (stock: any) => {
-          try {
-            const res = await fetch(
-              `https://finnhub.io/api/v1/quote?symbol=${stock.ticker}&token=${FINNHUB_KEY}`
-            );
-            const data = await res.json();
-            if (!data.c || data.c === 0) return null;
-            const change = ((data.c - data.pc) / data.pc) * 100;
-            return {
-              ...stock,
-              price: `${stock.market?.includes('LSE') ? '£' : '$'}${data.c.toFixed(2)}`,
-              change: `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`,
-              up: change >= 0,
-              changeNum: change,
-              rec: getRecommendation(change),
-            };
-          } catch { return null; }
-        })
-      );
-      setWatchlist(results.filter(Boolean));
+      const cached = await AsyncStorage.getItem('watchlistCache');
+      if (cached) setWatchlist(JSON.parse(cached));
     } catch (error) {
-      console.error('Failed to load watchlist:', error);
+      console.error('Failed to load watchlist cache:', error);
     } finally {
       setWatchlistLoading(false);
     }

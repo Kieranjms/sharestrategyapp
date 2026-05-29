@@ -94,22 +94,42 @@ export default function WatchlistScreen() {
       async function loadWatchlist() {
         try {
           setLoading(true);
-          const stored = await AsyncStorage.getItem('watchlist');
-          const items = stored ? JSON.parse(stored) : [];
-
-          if (items.length === 0) {
-            if (active) { setStocks([]); setLoading(false); }
+      
+          // Check if we have recently cached data (less than 5 minutes old)
+          const cached = await AsyncStorage.getItem('watchlistCache');
+          const cachedTime = await AsyncStorage.getItem('watchlistCacheTime');
+          const oneDay = 24 * 60 * 60 * 1000;
+          const isRecent = cachedTime && (Date.now() - parseInt(cachedTime)) < oneDay;
+      
+          if (cached && isRecent) {
+            // Use cached data — no API calls needed
+            setStocks(JSON.parse(cached));
+            setLoading(false);
             return;
           }
-
-          const results = await Promise.all(items.map(fetchPrice));
-          if (active) {
-            setStocks(results.filter(Boolean) as any[]);
+      
+          // Cache is old or missing — fetch fresh data
+          const stored = await AsyncStorage.getItem('watchlist');
+          const items = stored ? JSON.parse(stored) : [];
+      
+          if (items.length === 0) {
+            setStocks([]);
             setLoading(false);
+            return;
           }
+      
+          const results = await Promise.all(items.map(fetchPrice));
+          const filtered = results.filter(Boolean) as any[];
+      
+          // Save to cache with a timestamp
+          await AsyncStorage.setItem('watchlistCache', JSON.stringify(filtered));
+          await AsyncStorage.setItem('watchlistCacheTime', Date.now().toString());
+      
+          setStocks(filtered);
         } catch (error) {
           console.error('Failed to load watchlist:', error);
-          if (active) setLoading(false);
+        } finally {
+          setLoading(false);
         }
       }
 
