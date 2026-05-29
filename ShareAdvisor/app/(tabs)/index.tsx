@@ -1,10 +1,16 @@
 import { useState, useCallback } from 'react';
-import { StyleSheet, Text, View, ScrollView, ActivityIndicator, TouchableOpacity } from 'react-native';
+import {
+  StyleSheet, Text, View, ScrollView,
+  ActivityIndicator, TouchableOpacity, Dimensions,
+} from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 
 const OPENAI_KEY = process.env.EXPO_PUBLIC_OPENAI_KEY;
+const { width } = Dimensions.get('window');
+const TILE_GAP = 12;
+const SMALL_TILE = (width - 40 - TILE_GAP) / 2; // two tiles side by side
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -14,7 +20,9 @@ function getGreeting() {
 }
 
 function getDate() {
-  return new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+  return new Date().toLocaleDateString('en-GB', {
+    weekday: 'long', day: 'numeric', month: 'long',
+  });
 }
 
 function getRecommendation(change: number) {
@@ -25,19 +33,12 @@ function getRecommendation(change: number) {
 
 function safeParseJSON(text: string) {
   try {
-    const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(cleaned);
-  } catch {
-    return null;
-  }
+    return JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
+  } catch { return null; }
 }
 
 function cleanCiteTags(text: string) {
-  return text
-    .replace(/<cite[^>]*>/g, '')
-    .replace(/<\/cite>/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return text.replace(/<cite[^>]*>/g, '').replace(/<\/cite>/g, '').replace(/\s+/g, ' ').trim();
 }
 
 type BriefingData = {
@@ -55,15 +56,17 @@ type BriefingData = {
 
 export default function HomeScreen() {
   const router = useRouter();
-  const [watchlist, setWatchlist] = useState<any[]>([]);
-  const [watchlistLoading, setWatchlistLoading] = useState(true);
-  const [briefing, setBriefing] = useState<BriefingData | null>(null);
-  const [briefingLoading, setBriefingLoading] = useState(false);
+
+  const [watchlist, setWatchlist]               = useState<any[]>([]);
+  const [portfolio, setPortfolio]               = useState<any[]>([]);
+  const [briefing, setBriefing]                 = useState<BriefingData | null>(null);
+  const [briefingLoading, setBriefingLoading]   = useState(false);
   const [briefingExpanded, setBriefingExpanded] = useState(false);
-  const [hotPicks, setHotPicks] = useState<any[]>([]);
+  const [hotPicks, setHotPicks]                 = useState<any[]>([]);
   const [hotPicksExpanded, setHotPicksExpanded] = useState(false);
   const [lastBriefingDate, setLastBriefingDate] = useState('');
-  const [expandedStocks, setExpandedStocks] = useState<string[]>([]);
+  const [expandedStocks, setExpandedStocks]     = useState<string[]>([]);
+  const [topETF, setTopETF]                     = useState<any>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -74,22 +77,25 @@ export default function HomeScreen() {
   async function loadAll() {
     await Promise.all([
       loadWatchlist(),
+      loadPortfolio(),
       loadBriefing(),
       loadHotPicks(),
+      loadTopETF(),
     ]);
   }
 
-  // Reads from the cache saved by the watchlist screen — no extra API calls
   async function loadWatchlist() {
     try {
-      setWatchlistLoading(true);
       const cached = await AsyncStorage.getItem('watchlistCache');
       if (cached) setWatchlist(JSON.parse(cached));
-    } catch (error) {
-      console.error('Failed to load watchlist cache:', error);
-    } finally {
-      setWatchlistLoading(false);
-    }
+    } catch (e) { console.error(e); }
+  }
+
+  async function loadPortfolio() {
+    try {
+      const cached = await AsyncStorage.getItem('portfolioCache');
+      if (cached) setPortfolio(JSON.parse(cached));
+    } catch (e) { console.error(e); }
   }
 
   async function loadBriefing() {
@@ -113,11 +119,8 @@ export default function HomeScreen() {
       if (items.length === 0) {
         setBriefing({
           tldr: 'Add stocks to your watchlist to get a personalised morning briefing.',
-          marketOverview: '',
-          watchToday: '',
-          stocks: [],
+          marketOverview: '', watchToday: '', stocks: [],
         });
-        setBriefingLoading(false);
         return;
       }
 
@@ -125,52 +128,30 @@ export default function HomeScreen() {
       const today = new Date().toDateString();
 
       const prompt = `You are a personal investment analyst writing a morning briefing. Today is ${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}.
-
 The investor is watching: ${tickerList}
-
-Search Yahoo Finance, Reuters and BBC Business for the latest news.
-
-Return ONLY a valid JSON object in this exact format, no other text, no markdown, no cite tags:
+Return ONLY a valid JSON object:
 {
-  "tldr": "One punchy sentence summarising the market today. Max 15 words.",
-  "marketOverview": "2-3 sentence overview of overall market mood today. Cite sources by name in brackets e.g. (Reuters).",
+  "tldr": "One punchy sentence. Max 15 words.",
+  "marketOverview": "2-3 sentence overview of market mood today.",
   "watchToday": "One specific thing to watch today, 1-2 sentences.",
-  "stocks": [
-    {
-      "ticker": "AMD",
-      "name": "Advanced Micro Devices",
-      "summary": "2-3 sentence summary of news for this stock. Cite sources by name in brackets e.g. (Yahoo Finance).",
-      "sources": ["Yahoo Finance", "Reuters"],
-      "hasSignificantNews": true
-    }
-  ]
+  "stocks": [{ "ticker": "AMD", "name": "Advanced Micro Devices", "summary": "2-3 sentences.", "sources": ["Yahoo Finance"], "hasSignificantNews": true }]
 }
-
-Important: Do NOT use XML tags like <cite> in your response. Just write source names in brackets like (Reuters).
-Only include stocks with significant news. If no significant news, set hasSignificantNews to false.`;
+No markdown, no cite tags.`;
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${OPENAI_KEY}`,
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
         body: JSON.stringify({
-          model: 'gpt-4o',
-          max_tokens: 2000,
+          model: 'gpt-4o', max_tokens: 2000,
           messages: [
-            {
-              role: 'system',
-              content: 'You are a personal investment analyst. Always respond with valid JSON only, no markdown, no explanation, no cite tags.'
-            },
-            { role: 'user', content: prompt }
+            { role: 'system', content: 'Return valid JSON only.' },
+            { role: 'user', content: prompt },
           ],
         }),
       });
 
       const data = await response.json();
-      const textContent = data.choices?.[0]?.message?.content || '';
-      const parsed = safeParseJSON(textContent);
+      const parsed = safeParseJSON(data.choices?.[0]?.message?.content || '');
 
       if (parsed) {
         const cleaned = {
@@ -178,31 +159,16 @@ Only include stocks with significant news. If no significant news, set hasSignif
           tldr: cleanCiteTags(parsed.tldr || ''),
           marketOverview: cleanCiteTags(parsed.marketOverview || ''),
           watchToday: cleanCiteTags(parsed.watchToday || ''),
-          stocks: parsed.stocks?.map((s: any) => ({
-            ...s,
-            summary: cleanCiteTags(s.summary || ''),
-          })) || [],
+          stocks: parsed.stocks?.map((s: any) => ({ ...s, summary: cleanCiteTags(s.summary || '') })) || [],
         };
         await AsyncStorage.setItem('briefingData', JSON.stringify(cleaned));
         await AsyncStorage.setItem('briefingDate', today);
         setBriefing(cleaned);
         setLastBriefingDate(today);
-      } else {
-        setBriefing({
-          tldr: cleanCiteTags(textContent) || 'Unable to generate briefing.',
-          marketOverview: '',
-          watchToday: '',
-          stocks: [],
-        });
       }
-    } catch (error) {
-      console.error('Briefing failed:', error);
-      setBriefing({
-        tldr: 'Unable to generate briefing. Please try again.',
-        marketOverview: '',
-        watchToday: '',
-        stocks: [],
-      });
+    } catch (e) {
+      console.error('Briefing failed:', e);
+      setBriefing({ tldr: 'Unable to generate briefing.', marketOverview: '', watchToday: '', stocks: [] });
     } finally {
       setBriefingLoading(false);
     }
@@ -213,320 +179,258 @@ Only include stocks with significant news. If no significant news, set hasSignif
     if (stored) setHotPicks(JSON.parse(stored));
   }
 
+  async function loadTopETF() {
+    const stored = await AsyncStorage.getItem('etfPicks');
+    if (stored) {
+      const picks = JSON.parse(stored);
+      if (picks.length > 0) setTopETF(picks[0]);
+    }
+  }
+
   function toggleStock(ticker: string) {
     setExpandedStocks(prev =>
       prev.includes(ticker) ? prev.filter(t => t !== ticker) : [...prev, ticker]
     );
   }
 
-  const buyCount = watchlist.filter(s => s.rec === 'BUY').length;
+  // ── Portfolio calculations ──
+  const totalInvested = portfolio.reduce((sum, h) => sum + (h.quantity * h.buyPrice), 0);
+  const totalCurrent  = portfolio.reduce((sum, h) => sum + (h.currentValue ?? h.quantity * h.buyPrice), 0);
+  const totalPL       = totalCurrent - totalInvested;
+  const totalPLPct    = totalInvested > 0 ? (totalPL / totalInvested) * 100 : 0;
+
+  // ── Watchlist calculations ──
+  const buyCount  = watchlist.filter(s => s.rec === 'BUY').length;
   const holdCount = watchlist.filter(s => s.rec === 'HOLD').length;
   const sellCount = watchlist.filter(s => s.rec === 'SELL').length;
-  const biggestGainer = watchlist.reduce((a, b) => (a?.changeNum > b?.changeNum ? a : b), null);
-  const biggestLoser = watchlist.reduce((a, b) => (a?.changeNum < b?.changeNum ? a : b), null);
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+
+      {/* ── Header ── */}
       <View style={styles.header}>
         <View>
           <Text style={styles.greeting}>{getGreeting()}</Text>
           <Text style={styles.date}>{getDate()}</Text>
         </View>
-        <View style={styles.headerIcon}>
+        <TouchableOpacity style={styles.headerIcon}>
           <Ionicons name="notifications-outline" size={20} color="#818cf8" />
-        </View>
+        </TouchableOpacity>
       </View>
 
-      {/* Tile 1 — Morning Briefing */}
+      {/* ── Morning Briefing (full width) ── */}
       <View style={styles.tile}>
         <View style={styles.tileHeader}>
-          <View style={styles.tileIconWrapper}>
-            <Ionicons name="sunny-outline" size={18} color="#facc15" />
+          <View style={[styles.iconBox, { backgroundColor: '#facc1520' }]}>
+            <Ionicons name="sunny-outline" size={16} color="#facc15" />
           </View>
           <Text style={styles.tileTitle}>Morning Briefing</Text>
           <TouchableOpacity onPress={generateBriefing} disabled={briefingLoading} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Ionicons name="refresh-outline" size={16} color="#555" />
+            <Ionicons name="refresh-outline" size={15} color="#444" />
           </TouchableOpacity>
         </View>
 
         {briefingLoading ? (
-          <View style={styles.tileLoading}>
+          <View style={styles.loadingRow}>
             <ActivityIndicator size="small" color="#818cf8" />
-            <Text style={styles.tileLoadingText}>Searching the web & generating briefing...</Text>
+            <Text style={styles.loadingText}>Generating briefing...</Text>
           </View>
         ) : briefing ? (
           <>
-            <Text style={styles.tldrText}>{briefing.tldr}</Text>
-
-            <TouchableOpacity
-              style={styles.expandButton}
-              onPress={() => setBriefingExpanded(prev => !prev)}
-            >
-              <Text style={styles.expandButtonText}>
-                {briefingExpanded ? 'Show less' : 'Read full briefing'}
-              </Text>
-              <Ionicons
-                name={briefingExpanded ? 'chevron-up' : 'chevron-down'}
-                size={14}
-                color="#818cf8"
-              />
+            <Text style={styles.tldr}>{briefing.tldr}</Text>
+            <TouchableOpacity style={styles.expandRow} onPress={() => setBriefingExpanded(p => !p)}>
+              <Text style={styles.expandText}>{briefingExpanded ? 'Show less' : 'Read full briefing'}</Text>
+              <Ionicons name={briefingExpanded ? 'chevron-up' : 'chevron-down'} size={13} color="#818cf8" />
             </TouchableOpacity>
 
             {briefingExpanded && (
               <>
-                <Text style={styles.briefingText}>{briefing.marketOverview}</Text>
-
-                {briefing.stocks.length > 0 && (
-                  <View style={styles.stocksContainer}>
-                    {briefing.stocks.map((stock) => {
-                      const isExpanded = expandedStocks.includes(stock.ticker);
-                      const watchlistStock = watchlist.find(w => w.ticker === stock.ticker);
-                      return (
-                        <TouchableOpacity
-                          key={stock.ticker}
-                          style={styles.stockRow}
-                          onPress={() => toggleStock(stock.ticker)}
-                          activeOpacity={0.7}
-                        >
-                          <View style={styles.stockRowHeader}>
-                            <View style={styles.stockRowLeft}>
-                              <Text style={styles.stockRowTicker}>{stock.ticker}</Text>
-                              {watchlistStock && (
-                                <Text style={[
-                                  styles.stockRowChange,
-                                  { color: watchlistStock.up ? '#4ade80' : '#f87171' }
-                                ]}>
-                                  {watchlistStock.change}
-                                </Text>
-                              )}
-                              {stock.hasSignificantNews && (
-                                <View style={styles.newsBadge}>
-                                  <Text style={styles.newsBadgeText}>News</Text>
-                                </View>
-                              )}
-                            </View>
-                            <Ionicons
-                              name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                              size={16}
-                              color="#555"
-                            />
-                          </View>
-
-                          {isExpanded && (
-                            <View style={styles.stockExpanded}>
-                              <Text style={styles.stockSummary}>{stock.summary}</Text>
-                              {stock.sources.length > 0 && (
-                                <View style={styles.sourcesRow}>
-                                  <Ionicons name="link-outline" size={12} color="#555" />
-                                  <Text style={styles.sourcesText}>
-                                    Sources: {stock.sources.join(', ')}
-                                  </Text>
-                                </View>
-                              )}
-                              {watchlistStock && (
-                                <TouchableOpacity
-                                  style={styles.viewStockButton}
-                                  onPress={() => router.push({
-                                    pathname: '/stock',
-                                    params: {
-                                      ticker: stock.ticker,
-                                      name: stock.name,
-                                      price: watchlistStock.price,
-                                      change: watchlistStock.change,
-                                      rec: watchlistStock.rec,
-                                      market: watchlistStock.market,
-                                    }
-                                  })}
-                                >
-                                  <Text style={styles.viewStockText}>View stock →</Text>
-                                </TouchableOpacity>
-                              )}
-                            </View>
+                <Text style={styles.bodyText}>{briefing.marketOverview}</Text>
+                {briefing.stocks.map(stock => {
+                  const isExpanded = expandedStocks.includes(stock.ticker);
+                  const wStock = watchlist.find(w => w.ticker === stock.ticker);
+                  return (
+                    <TouchableOpacity key={stock.ticker} style={styles.stockRow} onPress={() => toggleStock(stock.ticker)}>
+                      <View style={styles.stockRowTop}>
+                        <View style={styles.stockRowLeft}>
+                          <Text style={styles.stockTicker}>{stock.ticker}</Text>
+                          {wStock && (
+                            <Text style={{ color: wStock.up ? '#4ade80' : '#f87171', fontSize: 12 }}>{wStock.change}</Text>
                           )}
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                )}
-
+                          {stock.hasSignificantNews && (
+                            <View style={styles.newsBadge}><Text style={styles.newsBadgeText}>News</Text></View>
+                          )}
+                        </View>
+                        <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={14} color="#444" />
+                      </View>
+                      {isExpanded && (
+                        <View style={{ marginTop: 8, gap: 6 }}>
+                          <Text style={styles.bodyText}>{stock.summary}</Text>
+                          {wStock && (
+                            <TouchableOpacity onPress={() => router.push({ pathname: '/stock', params: { ticker: stock.ticker, name: stock.name, price: wStock.price, change: wStock.change, rec: wStock.rec, market: wStock.market } })}>
+                              <Text style={styles.linkText}>View stock →</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
                 {briefing.watchToday !== '' && (
-                  <View style={styles.watchTodayContainer}>
+                  <View style={styles.watchTodayBox}>
                     <Text style={styles.watchTodayLabel}>📌 Watch today</Text>
-                    <Text style={styles.watchTodayText}>{briefing.watchToday}</Text>
+                    <Text style={styles.bodyText}>{briefing.watchToday}</Text>
                   </View>
-                )}
-
-                {lastBriefingDate && (
-                  <Text style={styles.briefingDate}>Last updated: {lastBriefingDate}</Text>
                 )}
               </>
             )}
           </>
         ) : (
-          <TouchableOpacity style={styles.generateButton} onPress={generateBriefing}>
-            <Ionicons name="sparkles-outline" size={16} color="#0f0f14" />
-            <Text style={styles.generateButtonText}>Generate Briefing</Text>
+          <TouchableOpacity style={styles.primaryButton} onPress={generateBriefing}>
+            <Ionicons name="sparkles-outline" size={15} color="#0f0f14" />
+            <Text style={styles.primaryButtonText}>Generate Briefing</Text>
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Tile 2 — Portfolio (placeholder) */}
-      <View style={styles.tile}>
-        <View style={styles.tileHeader}>
-          <View style={[styles.tileIconWrapper, { backgroundColor: '#4ade8020' }]}>
-            <Ionicons name="bar-chart-outline" size={18} color="#4ade80" />
-          </View>
-          <Text style={styles.tileTitle}>Portfolio</Text>
-        </View>
-        <View style={styles.portfolioPlaceholder}>
-          <Ionicons name="wallet-outline" size={32} color="#333" />
-          <Text style={styles.placeholderText}>Portfolio tracking coming soon</Text>
-          <Text style={styles.placeholderSub}>Track your holdings and total value</Text>
-        </View>
-      </View>
+      {/* ── Portfolio + Watchlist (2 columns) ── */}
+      <View style={styles.row}>
 
-      {/* Tile 3 — Watchlist Summary */}
-      <View style={styles.tile}>
-        <View style={styles.tileHeader}>
-          <View style={[styles.tileIconWrapper, { backgroundColor: '#facc1520' }]}>
-            <Ionicons name="star-outline" size={18} color="#facc15" />
-          </View>
-          <Text style={styles.tileTitle}>Watchlist</Text>
-          <TouchableOpacity onPress={() => router.push('/(tabs)/watchlist')}>
-            <Text style={styles.seeAll}>See all</Text>
-          </TouchableOpacity>
-        </View>
-
-        {watchlistLoading ? (
-          <View style={styles.tileLoading}>
-            <ActivityIndicator size="small" color="#818cf8" />
-            <Text style={styles.tileLoadingText}>Loading watchlist...</Text>
-          </View>
-        ) : watchlist.length === 0 ? (
-          <View style={styles.portfolioPlaceholder}>
-            <Ionicons name="star-outline" size={32} color="#333" />
-            <Text style={styles.placeholderText}>No stocks in watchlist</Text>
-            <TouchableOpacity onPress={() => router.push('/(tabs)/search')}>
-              <Text style={styles.placeholderLink}>Search and add stocks →</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <>
-            <View style={styles.statsRow}>
-              <View style={styles.statBox}>
-                <Text style={styles.statNumber}>{watchlist.length}</Text>
-                <Text style={styles.statLabel}>Watching</Text>
-              </View>
-              <View style={styles.statBox}>
-                <Text style={[styles.statNumber, { color: '#4ade80' }]}>{buyCount}</Text>
-                <Text style={styles.statLabel}>Buy</Text>
-              </View>
-              <View style={styles.statBox}>
-                <Text style={[styles.statNumber, { color: '#facc15' }]}>{holdCount}</Text>
-                <Text style={styles.statLabel}>Hold</Text>
-              </View>
-              <View style={styles.statBox}>
-                <Text style={[styles.statNumber, { color: '#f87171' }]}>{sellCount}</Text>
-                <Text style={styles.statLabel}>Sell</Text>
-              </View>
+        {/* Portfolio tile */}
+        <TouchableOpacity
+          style={[styles.smallTile, { width: SMALL_TILE }]}
+          onPress={() => router.push('/portfolio' as any)}
+          activeOpacity={0.7}
+        >
+          <View style={styles.tileHeader}>
+            <View style={[styles.iconBox, { backgroundColor: '#4ade8020' }]}>
+              <Ionicons name="wallet-outline" size={16} color="#4ade80" />
             </View>
+            <Text style={styles.tileTitle}>Portfolio</Text>
+            <Ionicons name="chevron-forward" size={14} color="#444" />
+          </View>
 
-            {biggestGainer && (
-              <View style={styles.moverRow}>
-                <Ionicons name="trending-up" size={14} color="#4ade80" />
-                <Text style={styles.moverLabel}>Top gainer:</Text>
-                <Text style={styles.moverTicker}>{biggestGainer.ticker}</Text>
-                <Text style={[styles.moverChange, { color: '#4ade80' }]}>{biggestGainer.change}</Text>
+          {portfolio.length === 0 ? (
+            <Text style={styles.emptySmall}>No holdings yet</Text>
+          ) : (
+            <>
+              <Text style={styles.bigNumber}>
+                £{totalCurrent.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </Text>
+              <Text style={styles.subLabel}>Current value</Text>
+              <Text style={[styles.plText, { color: totalPL >= 0 ? '#4ade80' : '#f87171' }]}>
+                {totalPL >= 0 ? '+' : ''}£{Math.abs(totalPL).toFixed(2)} ({totalPLPct.toFixed(1)}%)
+              </Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        {/* Watchlist tile */}
+        <TouchableOpacity
+          style={[styles.smallTile, { width: SMALL_TILE }]}
+          onPress={() => router.push('/(tabs)/watchlist')}
+          activeOpacity={0.7}
+        >
+          <View style={styles.tileHeader}>
+            <View style={[styles.iconBox, { backgroundColor: '#facc1520' }]}>
+              <Ionicons name="star-outline" size={16} color="#facc15" />
+            </View>
+            <Text style={styles.tileTitle}>Watchlist</Text>
+            <Ionicons name="chevron-forward" size={14} color="#444" />
+          </View>
+
+          {watchlist.length === 0 ? (
+            <Text style={styles.emptySmall}>No stocks saved</Text>
+          ) : (
+            <>
+              <Text style={styles.bigNumber}>{watchlist.length}</Text>
+              <Text style={styles.subLabel}>stocks</Text>
+              <View style={styles.recRow}>
+                <Text style={[styles.recPill, { color: '#4ade80' }]}>{buyCount} BUY</Text>
+                <Text style={[styles.recPill, { color: '#facc15' }]}>{holdCount} HOLD</Text>
+                <Text style={[styles.recPill, { color: '#f87171' }]}>{sellCount} SELL</Text>
               </View>
-            )}
-            {biggestLoser && biggestLoser.ticker !== biggestGainer?.ticker && (
-              <View style={styles.moverRow}>
-                <Ionicons name="trending-down" size={14} color="#f87171" />
-                <Text style={styles.moverLabel}>Biggest drop:</Text>
-                <Text style={styles.moverTicker}>{biggestLoser.ticker}</Text>
-                <Text style={[styles.moverChange, { color: '#f87171' }]}>{biggestLoser.change}</Text>
-              </View>
-            )}
-          </>
-        )}
+            </>
+          )}
+        </TouchableOpacity>
+
       </View>
 
-      {/* Tile 4 — Hot Picks */}
+      {/* ── Hot Picks (full width) ── */}
       <View style={styles.tile}>
         <View style={styles.tileHeader}>
-          <View style={[styles.tileIconWrapper, { backgroundColor: '#818cf820' }]}>
-            <Ionicons name="sparkles-outline" size={18} color="#818cf8" />
+          <View style={[styles.iconBox, { backgroundColor: '#818cf820' }]}>
+            <Ionicons name="sparkles-outline" size={16} color="#818cf8" />
           </View>
           <Text style={styles.tileTitle}>Hot Picks</Text>
           <TouchableOpacity onPress={() => router.push('/(tabs)/analysis')}>
-            <Text style={styles.seeAll}>Run new scan →</Text>
+            <Text style={styles.linkText}>New scan →</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setHotPicksExpanded(prev => !prev)} style={{ padding: 4 }}>
-            <Ionicons
-              name={hotPicksExpanded ? 'chevron-up' : 'chevron-down'}
-              size={16}
-              color="#555"
-            />
+          <TouchableOpacity onPress={() => setHotPicksExpanded(p => !p)} style={{ padding: 4 }}>
+            <Ionicons name={hotPicksExpanded ? 'chevron-up' : 'chevron-down'} size={15} color="#444" />
           </TouchableOpacity>
         </View>
 
         {hotPicks.length === 0 ? (
-          <View style={styles.portfolioPlaceholder}>
-            <Ionicons name="sparkles-outline" size={32} color="#333" />
-            <Text style={styles.placeholderText}>No analysis run yet</Text>
-            <TouchableOpacity onPress={() => router.push('/(tabs)/analysis')}>
-              <Text style={styles.placeholderLink}>Run AI Analysis →</Text>
-            </TouchableOpacity>
-          </View>
+          <Text style={styles.emptyText}>No analysis yet — run a scan to see picks</Text>
         ) : (
           <>
-            {(hotPicksExpanded ? hotPicks : hotPicks.slice(0, 2)).map((pick: any) => (
+            {(hotPicksExpanded ? hotPicks : hotPicks.slice(0, 3)).map((pick: any) => (
               <TouchableOpacity
                 key={pick.ticker}
                 style={styles.pickRow}
-                onPress={() => router.push({
-                  pathname: '/stock',
-                  params: {
-                    ticker: pick.ticker,
-                    name: pick.name,
-                    price: '',
-                    change: '',
-                    rec: pick.claudeVerdict,
-                    market: pick.exchange,
-                  }
-                })}
+                onPress={() => router.push({ pathname: '/stock', params: { ticker: pick.ticker, name: pick.name, price: '', change: '', rec: pick.claudeVerdict, market: pick.exchange } })}
               >
-                <View style={styles.pickLeft}>
+                <View style={{ flex: 1 }}>
                   <Text style={styles.pickTicker}>{pick.ticker}</Text>
                   <Text style={styles.pickName} numberOfLines={1}>{pick.name}</Text>
                 </View>
-                <View style={styles.pickRight}>
-                  <Text style={[styles.pickVerdict, {
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={[styles.verdict, {
                     color: pick.claudeVerdict?.includes('BUY') ? '#4ade80' :
-                      pick.claudeVerdict?.includes('SELL') ? '#f87171' : '#facc15'
+                           pick.claudeVerdict?.includes('SELL') ? '#f87171' : '#facc15'
                   }]}>
                     {pick.claudeVerdict?.split(' ')[0]}
                   </Text>
-                  <Text style={styles.pickBothAgree}>
-                    {pick.bothAgree ? '✓ Both agree' : ''}
-                  </Text>
+                  {pick.bothAgree && <Text style={styles.agreeText}>✓ Both agree</Text>}
                 </View>
               </TouchableOpacity>
             ))}
-
-            {!hotPicksExpanded && hotPicks.length > 2 && (
-              <TouchableOpacity
-                onPress={() => setHotPicksExpanded(true)}
-                style={styles.showMoreButton}
-              >
-                <Text style={styles.showMoreText}>
-                  +{hotPicks.length - 2} more — tap to expand
-                </Text>
+            {!hotPicksExpanded && hotPicks.length > 3 && (
+              <TouchableOpacity onPress={() => setHotPicksExpanded(true)} style={{ paddingTop: 10, alignItems: 'center' }}>
+                <Text style={styles.linkText}>+{hotPicks.length - 3} more</Text>
               </TouchableOpacity>
             )}
           </>
         )}
       </View>
+
+      {/* ── ETFs (full width) ── */}
+      <TouchableOpacity style={styles.tile} onPress={() => router.push('/(tabs)/etf')} activeOpacity={0.7}>
+        <View style={styles.tileHeader}>
+          <View style={[styles.iconBox, { backgroundColor: '#2dd4bf20' }]}>
+            <Ionicons name="bar-chart-outline" size={16} color="#2dd4bf" />
+          </View>
+          <Text style={styles.tileTitle}>ETFs</Text>
+          <Ionicons name="chevron-forward" size={14} color="#444" />
+        </View>
+        {topETF ? (
+          <View style={styles.etfPreview}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.pickTicker}>{topETF.ticker}</Text>
+              <Text style={styles.pickName}>{topETF.name}</Text>
+            </View>
+            <Text style={[styles.verdict, {
+              color: topETF.recommendation === 'BUY' ? '#4ade80' :
+                     topETF.recommendation === 'SELL' ? '#f87171' : '#facc15'
+            }]}>
+              {topETF.recommendation}
+            </Text>
+          </View>
+        ) : (
+          <Text style={styles.emptyText}>Tap to browse and scan ETFs</Text>
+        )}
+      </TouchableOpacity>
 
       <View style={{ height: 40 }} />
     </ScrollView>
@@ -534,61 +438,61 @@ Only include stocks with significant news. If no significant news, set hasSignif
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0f0f14', padding: 20 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20, marginBottom: 24 },
-  greeting: { fontSize: 22, fontWeight: '500', color: '#fff' },
-  date: { fontSize: 13, color: '#555', marginTop: 2 },
-  headerIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#15151e', justifyContent: 'center', alignItems: 'center' },
-  tile: { backgroundColor: '#15151e', borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 0.5, borderColor: '#1e1e2a' },
-  tileHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 },
-  tileIconWrapper: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#facc1520', justifyContent: 'center', alignItems: 'center' },
-  tileTitle: { fontSize: 16, fontWeight: '500', color: '#fff', flex: 1 },
-  tileLoading: { alignItems: 'center', padding: 20, gap: 8 },
-  tileLoadingText: { color: '#555', fontSize: 12, textAlign: 'center' },
-  tldrText: { fontSize: 14, color: '#fff', fontWeight: '500', lineHeight: 20, marginBottom: 10 },
-  expandButton: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
-  expandButtonText: { fontSize: 12, color: '#818cf8' },
-  briefingText: { fontSize: 14, color: '#ccc', lineHeight: 22, marginBottom: 12, marginTop: 12 },
-  briefingDate: { fontSize: 11, color: '#444', marginTop: 10 },
-  generateButton: { backgroundColor: '#818cf8', borderRadius: 10, padding: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  generateButtonText: { color: '#0f0f14', fontWeight: '500', fontSize: 14 },
-  stocksContainer: { borderTopWidth: 0.5, borderTopColor: '#1e1e2a', marginTop: 4 },
-  stockRow: { borderBottomWidth: 0.5, borderBottomColor: '#1e1e2a', paddingVertical: 12 },
-  stockRowHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  stockRowLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  stockRowTicker: { fontSize: 14, fontWeight: '500', color: '#fff' },
-  stockRowChange: { fontSize: 13 },
-  newsBadge: { backgroundColor: '#818cf820', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  newsBadgeText: { fontSize: 10, color: '#818cf8', fontWeight: '500' },
-  stockExpanded: { marginTop: 10, gap: 8 },
-  stockSummary: { fontSize: 13, color: '#ccc', lineHeight: 20 },
-  sourcesRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  sourcesText: { fontSize: 11, color: '#555' },
-  viewStockButton: { alignSelf: 'flex-start' },
-  viewStockText: { fontSize: 12, color: '#818cf8' },
-  watchTodayContainer: { backgroundColor: '#1a1a2e', borderRadius: 10, padding: 12, marginTop: 12 },
-  watchTodayLabel: { fontSize: 11, color: '#818cf8', fontWeight: '500', marginBottom: 4 },
-  watchTodayText: { fontSize: 13, color: '#ccc', lineHeight: 20 },
-  portfolioPlaceholder: { alignItems: 'center', padding: 24, gap: 8 },
-  placeholderText: { color: '#555', fontSize: 14, fontWeight: '500' },
-  placeholderSub: { color: '#444', fontSize: 12 },
-  placeholderLink: { color: '#818cf8', fontSize: 13, marginTop: 4 },
-  seeAll: { color: '#818cf8', fontSize: 12 },
-  statsRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
-  statBox: { flex: 1, backgroundColor: '#0f0f14', borderRadius: 10, padding: 10, alignItems: 'center', gap: 4 },
-  statNumber: { fontSize: 20, fontWeight: '500', color: '#fff' },
-  statLabel: { fontSize: 11, color: '#555' },
-  moverRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6, borderTopWidth: 0.5, borderTopColor: '#1e1e2a' },
-  moverLabel: { fontSize: 12, color: '#555', flex: 1 },
-  moverTicker: { fontSize: 12, fontWeight: '500', color: '#fff' },
-  moverChange: { fontSize: 12, fontWeight: '500' },
-  pickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: 0.5, borderTopColor: '#1e1e2a' },
-  pickLeft: { flex: 1 },
-  pickTicker: { fontSize: 14, fontWeight: '500', color: '#fff' },
-  pickName: { fontSize: 11, color: '#555', marginTop: 2 },
-  pickRight: { alignItems: 'flex-end' },
-  pickVerdict: { fontSize: 13, fontWeight: '500' },
-  pickBothAgree: { fontSize: 10, color: '#4ade80', marginTop: 2 },
-  showMoreButton: { paddingTop: 10, alignItems: 'center' },
-  showMoreText: { color: '#818cf8', fontSize: 12 },
+  container:       { flex: 1, backgroundColor: '#0f0f14', paddingHorizontal: 20 },
+  header:          { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20, marginBottom: 20 },
+  greeting:        { fontSize: 22, fontWeight: '600', color: '#fff' },
+  date:            { fontSize: 13, color: '#555', marginTop: 2 },
+  headerIcon:      { width: 38, height: 38, borderRadius: 19, backgroundColor: '#15151e', justifyContent: 'center', alignItems: 'center' },
+
+  // Tiles
+  tile:            { backgroundColor: '#15151e', borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 0.5, borderColor: '#1e1e2a' },
+  smallTile:       { backgroundColor: '#15151e', borderRadius: 16, padding: 14, borderWidth: 0.5, borderColor: '#1e1e2a' },
+  row:             { flexDirection: 'row', gap: TILE_GAP, marginBottom: 12 },
+  tileHeader:      { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+  iconBox:         { width: 28, height: 28, borderRadius: 7, justifyContent: 'center', alignItems: 'center' },
+  tileTitle:       { fontSize: 14, fontWeight: '600', color: '#fff', flex: 1 },
+
+  // Numbers
+  bigNumber:       { fontSize: 22, fontWeight: '700', color: '#fff', marginBottom: 2 },
+  subLabel:        { fontSize: 11, color: '#555', marginBottom: 6 },
+  plText:          { fontSize: 12, fontWeight: '600' },
+
+  // Rec pills
+  recRow:          { flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 2 },
+  recPill:         { fontSize: 10, fontWeight: '600' },
+
+  // Text styles
+  tldr:            { fontSize: 14, fontWeight: '500', color: '#fff', lineHeight: 20, marginBottom: 8 },
+  bodyText:        { fontSize: 13, color: '#9ca3af', lineHeight: 20, marginBottom: 4 },
+  emptyText:       { fontSize: 13, color: '#444', textAlign: 'center', paddingVertical: 8 },
+  emptySmall:      { fontSize: 12, color: '#444', marginTop: 4 },
+  linkText:        { fontSize: 12, color: '#818cf8' },
+
+  // Briefing
+  loadingRow:      { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
+  loadingText:     { color: '#555', fontSize: 12 },
+  expandRow:       { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
+  expandText:      { fontSize: 12, color: '#818cf8' },
+  watchTodayBox:   { backgroundColor: '#1a1a2e', borderRadius: 10, padding: 10, marginTop: 10 },
+  watchTodayLabel: { fontSize: 11, color: '#818cf8', fontWeight: '600', marginBottom: 4 },
+  newsBadge:       { backgroundColor: '#818cf820', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 },
+  newsBadgeText:   { fontSize: 9, color: '#818cf8', fontWeight: '600' },
+  stockRow:        { borderTopWidth: 0.5, borderTopColor: '#1e1e2a', paddingVertical: 10 },
+  stockRowTop:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  stockRowLeft:    { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  stockTicker:     { fontSize: 13, fontWeight: '600', color: '#fff' },
+
+  // Button
+  primaryButton:      { backgroundColor: '#818cf8', borderRadius: 10, padding: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  primaryButtonText:  { color: '#0f0f14', fontWeight: '600', fontSize: 13 },
+
+  // Picks
+  pickRow:    { flexDirection: 'row', alignItems: 'center', paddingVertical: 9, borderTopWidth: 0.5, borderTopColor: '#1e1e2a' },
+  pickTicker: { fontSize: 13, fontWeight: '600', color: '#fff' },
+  pickName:   { fontSize: 11, color: '#555', marginTop: 1 },
+  verdict:    { fontSize: 13, fontWeight: '700' },
+  agreeText:  { fontSize: 10, color: '#4ade80', marginTop: 2 },
+
+  // ETF preview
+  etfPreview: { flexDirection: 'row', alignItems: 'center' },
 });

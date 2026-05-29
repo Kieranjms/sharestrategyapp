@@ -1,3 +1,5 @@
+// app/(tabs)/_layout.tsx
+
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -9,11 +11,11 @@ export default function TabLayout() {
         tabBarStyle: {
           backgroundColor: '#0f0f14',
           borderTopColor: '#1e1e2a',
-          height: 60,
-          paddingBottom: 8,
+          borderTopWidth: 0.5,
         },
         tabBarActiveTintColor: '#818cf8',
         tabBarInactiveTintColor: '#444',
+        tabBarLabelStyle: { fontSize: 10, marginBottom: 2 },
       }}
     >
       <Tabs.Screen
@@ -26,11 +28,29 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="watchlist"
+        name="strategy"
         options={{
-          title: 'Watchlist',
+          title: 'Strategy',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="star-outline" size={size} color={color} />
+            <Ionicons name="bulb-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="analysis"
+        options={{
+          title: 'AI Analysis',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="sparkles-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="etf"
+        options={{
+          title: 'ETFs',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="bar-chart-outline" size={size} color={color} />
           ),
         }}
       />
@@ -43,35 +63,14 @@ export default function TabLayout() {
           ),
         }}
       />
+
+      {/* Watchlist — kept as a screen but hidden from the tab bar */}
       <Tabs.Screen
-        name="strategy"
+        name="watchlist"
         options={{
-          title: 'Strategy',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="bulb-outline" size={size} color={color} />
-          ),
+          href: null, // hides it from the tab bar
         }}
       />
-<Tabs.Screen
-  name="analysis"
-  options={{
-    title: 'AI Analysis',
-    tabBarIcon: ({ color, size }) => (
-      <Ionicons name="sparkles-outline" size={size} color={color} />
-    ),
-  }}
-/>
-<Tabs.Screen
-  name="etf"
-  options={{
-    title: 'ETFs',
-    tabBarIcon: ({ color, size }) => (
-      <Ionicons name="bar-chart-outline" size={size} color={color} />
-    ),
-  }}
-/>
-
-      <Tabs.Screen name="explore" options={{ href: null }} />
     </Tabs>
   );
 }
